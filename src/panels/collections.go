@@ -10,7 +10,8 @@ type CollectionItem struct {
 	Type         string
 	FilePath     string
 	IsFolder     bool
-	RequestIndex int // Index into the bruRequests array, -1 for folders
+	IsTagGroup   bool
+	RequestIndex int // Index into the bruRequests array, -1 for folders/tag groups
 }
 
 func RenderCollections(width, height int, activePanel bool, vp *viewport.Model, focusedStyle, blurredStyle, titleStyle lipgloss.Style) string {
@@ -21,15 +22,22 @@ func RenderCollections(width, height int, activePanel bool, vp *viewport.Model, 
 		style = blurredStyle
 	}
 
-	title := titleStyle.Width(width - 6).Render("Collections")
-	
-	// Update viewport dimensions
+	// Update viewport dimensions - account for border and inline title
 	vp.Width = width - 4  // Account for padding
-	vp.Height = height - 4 // Account for title and padding
+	vp.Height = height - 3 // Account for padding and inline title
+	
+	// Create title bar that looks like it's part of the border
+	title := titleStyle.Render(" Collections ")
+	titleBar := lipgloss.NewStyle().
+		Width(width-2).
+		Align(lipgloss.Left).
+		Render(title)
+	
+	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, vp.View())
 	
 	return style.
 		Width(width).
 		Height(height).
-		Padding(1, 2).
-		Render(lipgloss.JoinVertical(lipgloss.Left, title, vp.View()))
+		Padding(0, 1).
+		Render(content)
 }

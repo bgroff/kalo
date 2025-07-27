@@ -22,6 +22,7 @@ type HTTPResponse struct {
 	Body         string            `json:"body"`
 	ResponseTime time.Duration     `json:"response_time"`
 	Error        string            `json:"error,omitempty"`
+	IsJSON       bool              `json:"is_json"`
 }
 
 func max(a, b int) int {
@@ -38,8 +39,6 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 	} else {
 		style = blurredStyle
 	}
-
-	title := titleStyle.Width(width - 6).Render("Response")
 	
 	var status string
 	if isLoading {
@@ -74,7 +73,7 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 	}
 
 	// Calculate available space for both viewports
-	availableHeight := height - 8 // Account for padding, borders, status line, and headers
+	availableHeight := height - 6 // Account for padding, borders, status line
 	headersHeight := availableHeight / 3  // 1/3 for headers
 	bodyHeight := availableHeight - headersHeight // 2/3 for body
 	
@@ -126,7 +125,13 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 	
 	bodyTitle := bodyCursor + sectionStyle.Render("Response Body:") + bodyScrollInfo
 
-	content := lipgloss.JoinVertical(
+	title := titleStyle.Render(" Response ")
+	titleBar := lipgloss.NewStyle().
+		Width(width-2).
+		Align(lipgloss.Left).
+		Render(title)
+
+	responseContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		status,
 		headersTitle,
@@ -134,10 +139,12 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 		bodyTitle,
 		responseViewport.View(),
 	)
+	
+	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, responseContent)
 
 	return style.
 		Width(width).
 		Height(height).
-		Padding(1, 2).
-		Render(lipgloss.JoinVertical(lipgloss.Left, title, content))
+		Padding(0, 1).
+		Render(content)
 }

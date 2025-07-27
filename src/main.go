@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/itchyny/gojq"
 
 	"kalo/src/panels"
 )
@@ -33,6 +35,11 @@ type importCompleteMsg struct {
 	err     error
 }
 
+type jqFilterMsg struct {
+	result string
+	err    error
+}
+
 type model struct {
 	width            int
 	height           int
@@ -51,6 +58,7 @@ type model struct {
 	responseViewport viewport.Model
 	headersViewport  viewport.Model
 	responseCursor   panels.ResponseSection
+	originalResponse string // Store original response for jq filtering
 	commandPalette   *CommandPalette
 	inputDialog      *InputDialog
 }
@@ -164,17 +172,17 @@ func (m *model) loadBruFiles() {
 		return
 	}
 
-	// Add collection folders first
+	// Group requests by collection and then by tag
+	collections := make(map[string]map[string][]*panels.BruRequest)
+	requestPaths := make(map[*panels.BruRequest]string)
+
+	// Add collection folders first and load their requests
 	for _, entry := range dirEntries {
 		if entry.IsDir() {
-			collectionPath := filepath.Join(collectionsDir, entry.Name())
-			m.collections = append(m.collections, panels.CollectionItem{
-				Name:         "📁 " + entry.Name(),
-				Type:         "folder",
-				FilePath:     collectionPath,
-				IsFolder:     true,
-				RequestIndex: -1, // Folders don't have requests
-			})
+			collectionName := entry.Name()
+			collectionPath := filepath.Join(collectionsDir, collectionName)
+			
+			collections[collectionName] = make(map[string][]*panels.BruRequest)
 
 			// Load .bru files from this collection
 			collectionFiles, err := os.ReadDir(collectionPath)
@@ -199,24 +207,23 @@ func (m *model) loadBruFiles() {
 					}
 
 					m.bruRequests = append(m.bruRequests, request)
-					requestIndex := len(m.bruRequests) - 1 // Index of the request we just added
+					requestPaths[request] = bruPath
 
-					methodColor := getMethodColor(request.HTTP.Method)
-					displayName := fmt.Sprintf("    %s %s", methodColor, request.Meta.Name)
-
-					m.collections = append(m.collections, panels.CollectionItem{
-						Name:         displayName,
-						Type:         "request",
-						FilePath:     bruPath,
-						IsFolder:     false,
-						RequestIndex: requestIndex,
-					})
+					// Group by tags, or use "untagged" if no tags
+					if len(request.Tags) == 0 {
+						collections[collectionName]["untagged"] = append(collections[collectionName]["untagged"], request)
+					} else {
+						for _, tag := range request.Tags {
+							collections[collectionName][tag] = append(collections[collectionName][tag], request)
+						}
+					}
 				}
 			}
 		}
 	}
 
 	// Add any standalone .bru files in the root collections directory
+	rootRequests := make(map[string][]*panels.BruRequest)
 	for _, entry := range dirEntries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".bru") {
 			bruPath := filepath.Join(collectionsDir, entry.Name())
@@ -234,21 +241,160 @@ func (m *model) loadBruFiles() {
 			}
 
 			m.bruRequests = append(m.bruRequests, request)
-			requestIndex := len(m.bruRequests) - 1 // Index of the request we just added
+			requestPaths[request] = bruPath
 
-			methodColor := getMethodColor(request.HTTP.Method)
-			displayName := fmt.Sprintf("  %s %s", methodColor, request.Meta.Name)
-
-			m.collections = append(m.collections, panels.CollectionItem{
-				Name:         displayName,
-				Type:         "request",
-				FilePath:     bruPath,
-				IsFolder:     false,
-				RequestIndex: requestIndex,
-			})
+			// Group by tags, or use "untagged" if no tags
+			if len(request.Tags) == 0 {
+				rootRequests["untagged"] = append(rootRequests["untagged"], request)
+			} else {
+				for _, tag := range request.Tags {
+					rootRequests[tag] = append(rootRequests[tag], request)
+				}
+			}
 		}
 	}
 
+	// Build the display list with tag grouping
+	requestIndexMap := make(map[*panels.BruRequest]int)
+	for i, req := range m.bruRequests {
+		requestIndexMap[req] = i
+	}
+
+	// Add collection folders with tag grouping
+	collectionNames := make([]string, 0, len(collections))
+	for name := range collections {
+		collectionNames = append(collectionNames, name)
+	}
+	sort.Strings(collectionNames)
+
+	for _, collectionName := range collectionNames {
+		tags := collections[collectionName]
+		
+		// Only add collection folder if it has requests
+		hasRequests := false
+		for _, requests := range tags {
+			if len(requests) > 0 {
+				hasRequests = true
+				break
+			}
+		}
+		
+		if !hasRequests {
+			continue
+		}
+
+		// Add collection folder header
+		m.collections = append(m.collections, panels.CollectionItem{
+			Name:         "📁 " + collectionName,
+			Type:         "folder",
+			FilePath:     filepath.Join(collectionsDir, collectionName),
+			IsFolder:     true,
+			IsTagGroup:   false,
+			RequestIndex: -1,
+		})
+
+		// Get sorted tag names
+		tagNames := make([]string, 0, len(tags))
+		for tagName := range tags {
+			if len(tags[tagName]) > 0 { // Only include tags that have requests
+				tagNames = append(tagNames, tagName)
+			}
+		}
+		sort.Strings(tagNames)
+
+		// Add tag groups and requests
+		for _, tagName := range tagNames {
+			requests := tags[tagName]
+
+			// Add tag group header (unless it's "untagged" and only one tag group)
+			if len(tagNames) > 1 || tagName != "untagged" {
+				tagDisplayName := "🏷️ " + tagName
+				if tagName == "untagged" {
+					tagDisplayName = "📄 untagged"
+				}
+				m.collections = append(m.collections, panels.CollectionItem{
+					Name:         "    " + tagDisplayName,
+					Type:         "tag",
+					FilePath:     "",
+					IsFolder:     false,
+					IsTagGroup:   true,
+					RequestIndex: -1,
+				})
+			}
+
+			// Add requests under this tag
+			for _, request := range requests {
+				methodColor := getMethodColor(request.HTTP.Method)
+				indentLevel := "        "
+				if len(tagNames) == 1 && tagName == "untagged" {
+					indentLevel = "    " // Less indentation if no tag groups
+				}
+				displayName := fmt.Sprintf("%s%s %s", indentLevel, methodColor, request.Meta.Name)
+
+				m.collections = append(m.collections, panels.CollectionItem{
+					Name:         displayName,
+					Type:         "request",
+					FilePath:     requestPaths[request],
+					IsFolder:     false,
+					IsTagGroup:   false,
+					RequestIndex: requestIndexMap[request],
+				})
+			}
+		}
+	}
+
+	// Add root requests with tag grouping
+	if len(rootRequests) > 0 {
+		// Get sorted tag names
+		tagNames := make([]string, 0, len(rootRequests))
+		for tagName := range rootRequests {
+			tagNames = append(tagNames, tagName)
+		}
+		sort.Strings(tagNames)
+
+		// Add tag groups and requests
+		for _, tagName := range tagNames {
+			requests := rootRequests[tagName]
+			if len(requests) == 0 {
+				continue
+			}
+
+			// Add tag group header (unless it's "untagged" and only one tag group)
+			if len(tagNames) > 1 || tagName != "untagged" {
+				tagDisplayName := "🏷️ " + tagName
+				if tagName == "untagged" {
+					tagDisplayName = "📄 untagged"
+				}
+				m.collections = append(m.collections, panels.CollectionItem{
+					Name:         tagDisplayName,
+					Type:         "tag",
+					FilePath:     "",
+					IsFolder:     false,
+					IsTagGroup:   true,
+					RequestIndex: -1,
+				})
+			}
+
+			// Add requests under this tag
+			for _, request := range requests {
+				methodColor := getMethodColor(request.HTTP.Method)
+				indentLevel := "    "
+				if len(tagNames) == 1 && tagName == "untagged" {
+					indentLevel = "  " // Less indentation if no tag groups
+				}
+				displayName := fmt.Sprintf("%s%s %s", indentLevel, methodColor, request.Meta.Name)
+
+				m.collections = append(m.collections, panels.CollectionItem{
+					Name:         displayName,
+					Type:         "request",
+					FilePath:     requestPaths[request],
+					IsFolder:     false,
+					IsTagGroup:   false,
+					RequestIndex: requestIndexMap[request],
+				})
+			}
+		}
+	}
 
 	if len(m.bruRequests) > 0 {
 		m.currentReq = m.bruRequests[0]
@@ -301,6 +447,60 @@ func getMethodColor(method string) string {
 		return "🟠 PATCH"
 	default:
 		return "⚪ " + method
+	}
+}
+
+func (m *model) applyJqFilterWithInput(filter string) tea.Cmd {
+	if m.originalResponse == "" || filter == "" {
+		return nil
+	}
+
+	originalData := m.originalResponse
+
+	return func() tea.Msg {
+		// Parse the jq query
+		query, err := gojq.Parse(filter)
+		if err != nil {
+			return jqFilterMsg{err: fmt.Errorf("jq parse error: %v", err)}
+		}
+
+		// Parse the JSON
+		var jsonData interface{}
+		if err := json.Unmarshal([]byte(originalData), &jsonData); err != nil {
+			return jqFilterMsg{err: fmt.Errorf("JSON parse error: %v", err)}
+		}
+
+		// Apply the filter
+		iter := query.Run(jsonData)
+		var results []interface{}
+		for {
+			v, ok := iter.Next()
+			if !ok {
+				break
+			}
+			if err, ok := v.(error); ok {
+				return jqFilterMsg{err: fmt.Errorf("jq filter error: %v", err)}
+			}
+			results = append(results, v)
+		}
+
+		// Format the result
+		var resultData interface{}
+		if len(results) == 0 {
+			resultData = nil
+		} else if len(results) == 1 {
+			resultData = results[0]
+		} else {
+			resultData = results
+		}
+
+		// Convert back to pretty JSON
+		resultBytes, err := json.MarshalIndent(resultData, "", "  ")
+		if err != nil {
+			return jqFilterMsg{err: fmt.Errorf("JSON marshal error: %v", err)}
+		}
+
+		return jqFilterMsg{result: string(resultBytes)}
 	}
 }
 
@@ -477,7 +677,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+n":
 			// Direct shortcut to create new request
 			return m, m.executeCommand("new_request")
+		case "ctrl+j":
+			// Open jq filter modal for JSON responses
+			if m.activePanel == responsePanel && m.lastResponse != nil && m.lastResponse.IsJSON {
+				return m, m.executeCommand("jq_filter")
+			}
 		}
+		
 	case httpResponseMsg:
 		m.isLoading = false
 		if msg.err != nil {
@@ -487,6 +693,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.headersViewport.SetContent("No headers available")
 		} else {
 			m.lastResponse = msg.response
+			m.originalResponse = msg.response.Body
 			m.response = m.httpClient.FormatResponseForDisplay(msg.response)
 			m.statusCode = msg.response.StatusCode
 			m.responseViewport.SetContent(m.response)
@@ -518,6 +725,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Note: Error handling could be improved with a status message
 		return m, nil
+	case jqFilterMsg:
+		if msg.err != nil {
+			// Show error in response viewport
+			m.responseViewport.SetContent(fmt.Sprintf("jq Error: %v", msg.err))
+		} else {
+			// Show filtered result
+			m.response = msg.result
+			m.responseViewport.SetContent(m.response)
+			m.responseViewport.GotoTop()
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -528,7 +746,7 @@ func (m *model) updateCurrentRequest() {
 	}
 
 	item := m.collections[m.selectedReq]
-	if item.IsFolder {
+	if item.IsFolder || item.IsTagGroup {
 		return
 	}
 
@@ -558,7 +776,7 @@ func getCurrentRequestFilePath(m *model) string {
 	}
 	
 	item := m.collections[m.selectedReq]
-	if item.IsFolder {
+	if item.IsFolder || item.IsTagGroup {
 		return ""
 	}
 	
@@ -581,6 +799,16 @@ func getCurrentCollectionPath(m *model) string {
 	// If current item is a folder, use that folder
 	if currentItem.IsFolder {
 		return currentItem.FilePath
+	}
+	
+	// If current item is a tag group, find its parent collection folder
+	if currentItem.IsTagGroup {
+		for i := m.selectedReq - 1; i >= 0; i-- {
+			if m.collections[i].IsFolder {
+				return m.collections[i].FilePath
+			}
+		}
+		return collectionsDir
 	}
 	
 	// If current item is a request, find its parent collection folder
@@ -639,6 +867,16 @@ func (m *model) executeCommand(action string) tea.Cmd {
 			Type:   OpenAPIImportInput,
 			Title:  "Import OpenAPI Specification",
 			Action: action,
+		}
+		m.inputDialog.Show(spec)
+		return nil
+	case "jq_filter":
+		spec := InputSpec{
+			Type:        TextInput,
+			Title:       "jq Filter",
+			Prompt:      "Enter jq expression:",
+			Placeholder: ".data | .items[]",
+			Action:      action,
 		}
 		m.inputDialog.Show(spec)
 		return nil
@@ -779,6 +1017,12 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 					return importCompleteMsg{success: err == nil, err: err}
 				}
 			}
+		}
+		return nil
+	case "jq_filter":
+		if input != "" {
+			// Apply jq filter to stored original response
+			return m.applyJqFilterWithInput(input)
 		}
 		return nil
 	default:

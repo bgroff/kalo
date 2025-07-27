@@ -125,7 +125,9 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 	// Format response body
 	bodyStr := string(bodyBytes)
 	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") {
+	isJSON := strings.Contains(contentType, "application/json")
+	
+	if isJSON {
 		// Pretty print JSON
 		var jsonObj interface{}
 		if err := json.Unmarshal(bodyBytes, &jsonObj); err == nil {
@@ -141,6 +143,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 		Headers:      headers,
 		Body:         bodyStr,
 		ResponseTime: responseTime,
+		IsJSON:       isJSON,
 	}, nil
 }
 
