@@ -1,0 +1,32 @@
+meta {
+  name: Get Users
+  type: http
+  seq: 1
+}
+
+get {
+  url: https://jsonplaceholder.typicode.com/users
+  body: none
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Accept: application/json
+}
+
+query {
+  limit: '10'
+  page: '1'
+}
+
+tests {
+  test("should return 200", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
+
+docs {
+  This endpoint retrieves a list of all users.
+  It supports pagination via limit and page query parameters.
+}

@@ -1,0 +1,49 @@
+meta {
+  name: Update User
+  type: http
+  seq: 3
+}
+
+put {
+  url: https://jsonplaceholder.typicode.com/users/1
+  body: json
+  auth: bearer
+}
+
+headers {
+  Content-Type: application/json
+  Accept: application/json
+  @disabled
+  X-Debug: true
+}
+
+query {
+  @description('Include related data')
+  include: 'posts,albums'
+}
+
+auth:bearer {
+  token: {{API_TOKEN}}
+}
+
+body:json {
+  {
+    "id": 1,
+    "name": "Jane Doe",
+    "username": "janedoe",
+    "email": "jane@example.com"
+  }
+}
+
+tests {
+  test("should update user successfully", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().name).to.equal("Jane Doe");
+  });
+
+  test("should return updated user data", function() {
+    const user = res.getBody();
+    expect(user.id).to.equal(1);
+    expect(user.email).to.equal("jane@example.com");
+  });
+}

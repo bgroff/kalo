@@ -1,0 +1,48 @@
+meta {
+  name: Create User
+  type: http
+  seq: 2
+}
+
+post {
+  url: https://jsonplaceholder.typicode.com/users
+  body: json
+  auth: bearer
+}
+
+headers {
+  Content-Type: application/json
+  Accept: application/json
+}
+
+auth:bearer {
+  token: {{API_TOKEN}}
+}
+
+body:json {
+  {
+    "name": "John Doe",
+    "username": "johndoe",
+    "email": "john@example.com",
+    "address": {
+      "street": "Kulas Light",
+      "suite": "Apt. 556",
+      "city": "Gwenborough",
+      "zipcode": "92998-3874"
+    },
+    "phone": "1-770-736-8031 x56442",
+    "website": "hildegard.org"
+  }
+}
+
+tests {
+  test("should create user successfully", function() {
+    expect(res.getStatus()).to.equal(201);
+    expect(res.getBody().name).to.equal("John Doe");
+  });
+}
+
+vars {
+  API_TOKEN: your-api-token-here
+  BASE_URL: https://jsonplaceholder.typicode.com
+}
