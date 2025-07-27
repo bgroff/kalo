@@ -28,6 +28,7 @@ type BruRequest struct {
 	Vars    map[string]string `json:"vars,omitempty"`
 	Tests   string            `json:"tests,omitempty"`
 	Docs    string            `json:"docs,omitempty"`
+	Tags    []string          `json:"tags,omitempty"`
 }
 
 type BruMeta struct {
@@ -59,15 +60,19 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		style = blurredStyle
 	}
 
-	title := titleStyle.Width(width - 6).Render("Request")
-	
 	if currentReq == nil {
-		content := "No request selected"
+		title := titleStyle.Render(" Request ")
+		titleBar := lipgloss.NewStyle().
+			Width(width-2).
+			Align(lipgloss.Left).
+			Render(title)
+		
+		content := lipgloss.JoinVertical(lipgloss.Left, titleBar, "No request selected")
 		return style.
 			Width(width).
 			Height(height).
-			Padding(1, 2).
-			Render(lipgloss.JoinVertical(lipgloss.Left, title, content))
+			Padding(0, 1).
+			Render(content)
 	}
 
 	var sections []string
@@ -154,13 +159,20 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		sections = append(sections, "  "+currentReq.Body.Data)
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	title := titleStyle.Render(" Request ")
+	titleBar := lipgloss.NewStyle().
+		Width(width-2).
+		Align(lipgloss.Left).
+		Render(title)
+	
+	sectionsContent := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, sectionsContent)
 
 	return style.
 		Width(width).
 		Height(height).
-		Padding(1, 2).
-		Render(lipgloss.JoinVertical(lipgloss.Left, title, content))
+		Padding(0, 1).
+		Render(content)
 }
 
 func GetMaxRequestSection(currentReq *BruRequest) RequestSection {

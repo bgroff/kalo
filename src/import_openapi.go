@@ -213,6 +213,15 @@ func generateBrunoRequest(method, path string, operation *OpenAPIOperation, base
 	content.WriteString(fmt.Sprintf("  seq: %d\n", seq))
 	content.WriteString("}\n\n")
 
+	// Tags block (if tags exist)
+	if len(operation.Tags) > 0 {
+		content.WriteString("tags {\n")
+		for _, tag := range operation.Tags {
+			content.WriteString(fmt.Sprintf("  %s\n", tag))
+		}
+		content.WriteString("}\n\n")
+	}
+
 	// HTTP method block
 	fullURL := constructFullURL(baseURL, path)
 	content.WriteString(fmt.Sprintf("%s {\n", strings.ToLower(method)))

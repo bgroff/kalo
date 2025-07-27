@@ -30,6 +30,7 @@ func (p *BruParser) Parse() (*panels.BruRequest, error) {
 		Query:   make(map[string]string),
 		Vars:    make(map[string]string),
 		Auth:    panels.BruAuth{Values: make(map[string]string)},
+		Tags:    make([]string, 0),
 	}
 
 	for p.nextLine() {
@@ -75,6 +76,10 @@ func (p *BruParser) Parse() (*panels.BruRequest, error) {
 			}
 		} else if strings.HasPrefix(line, "docs {") {
 			if err := p.parseDocs(request); err != nil {
+				return nil, fmt.Errorf("line %d: %v", p.lineNum, err)
+			}
+		} else if strings.HasPrefix(line, "tags {") {
+			if err := p.parseTags(request); err != nil {
 				return nil, fmt.Errorf("line %d: %v", p.lineNum, err)
 			}
 		}
@@ -351,6 +356,29 @@ func (p *BruParser) parseDocs(request *panels.BruRequest) error {
 	}
 
 	request.Docs = strings.TrimSpace(content.String())
+	return nil
+}
+
+func (p *BruParser) parseTags(request *panels.BruRequest) error {
+	for p.nextLine() {
+		line := strings.TrimSpace(p.line)
+		if line == "}" {
+			break
+		}
+		if line == "" {
+			continue
+		}
+
+		// Tags can be on separate lines or comma-separated
+		tags := strings.Split(line, ",")
+		for _, tag := range tags {
+			tag = strings.TrimSpace(tag)
+			tag = p.unquoteString(tag)
+			if tag != "" {
+				request.Tags = append(request.Tags, tag)
+			}
+		}
+	}
 	return nil
 }
 
