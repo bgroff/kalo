@@ -200,31 +200,6 @@ func (c *HTTPClient) FormatResponseForDisplay(httpResp *panels.HTTPResponse) str
 		return fmt.Sprintf("Error: %s", httpResp.Error)
 	}
 
-	var result strings.Builder
-	
-	// Status and timing
-	result.WriteString(fmt.Sprintf("Status: %s\n", httpResp.Status))
-	result.WriteString(fmt.Sprintf("Time: %v\n", httpResp.ResponseTime))
-	result.WriteString("\n")
-	
-	// Response headers (show a few important ones)
-	if len(httpResp.Headers) > 0 {
-		result.WriteString("Headers:\n")
-		importantHeaders := []string{"content-type", "content-length", "server", "date"}
-		for _, header := range importantHeaders {
-			for key, value := range httpResp.Headers {
-				if strings.ToLower(key) == header {
-					result.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
-					break
-				}
-			}
-		}
-		result.WriteString("\n")
-	}
-	
-	// Response body
-	result.WriteString("Body:\n")
-	result.WriteString(httpResp.Body)
-	
-	return result.String()
+	// Return only the response body since headers are displayed separately
+	return httpResp.Body
 }
