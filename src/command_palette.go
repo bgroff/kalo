@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -14,7 +16,7 @@ type Command struct {
 
 type CommandPalette struct {
 	visible         bool
-	input           string
+	textInput       textinput.Model
 	cursor          int
 	commands        []Command
 	filteredCommands []Command
@@ -24,14 +26,22 @@ func NewCommandPalette() *CommandPalette {
 	commands := []Command{
 		{Name: "Create Collection", Description: "Create a new collection", Action: "create_collection"},
 		{Name: "New Request", Description: "Create a new request file", Action: "new_request"},
+		{Name: "Edit Request", Description: "Edit the current request", Action: "edit_request"},
+		{Name: "Import OpenAPI", Description: "Import OpenAPI 3.x specification", Action: "import_openapi"},
 		{Name: "Import Collection", Description: "Import Bruno collection", Action: "import_collection"},
 		{Name: "Settings", Description: "Open application settings", Action: "settings"},
 	}
 
+	ti := textinput.New()
+	ti.Focus()
+	ti.Placeholder = "Search commands..."
+	ti.Width = 50
+
 	cp := &CommandPalette{
-		visible:  false,
-		commands: commands,
-		cursor:   0,
+		visible:   false,
+		textInput: ti,
+		commands:  commands,
+		cursor:    0,
 	}
 	cp.updateFiltered()
 	return cp
@@ -39,14 +49,16 @@ func NewCommandPalette() *CommandPalette {
 
 func (cp *CommandPalette) Show() {
 	cp.visible = true
-	cp.input = ""
+	cp.textInput.SetValue("")
+	cp.textInput.Focus()
 	cp.cursor = 0
 	cp.updateFiltered()
 }
 
 func (cp *CommandPalette) Hide() {
 	cp.visible = false
-	cp.input = ""
+	cp.textInput.SetValue("")
+	cp.textInput.Blur()
 	cp.cursor = 0
 }
 
@@ -55,13 +67,52 @@ func (cp *CommandPalette) IsVisible() bool {
 }
 
 func (cp *CommandPalette) SetInput(input string) {
-	cp.input = input
+	cp.textInput.SetValue(input)
 	cp.cursor = 0
 	cp.updateFiltered()
 }
 
 func (cp *CommandPalette) GetInput() string {
-	return cp.input
+	return cp.textInput.Value()
+}
+
+func (cp *CommandPalette) UpdateTextInput(msg interface{}) {
+	var cmd tea.Cmd
+	cp.textInput, cmd = cp.textInput.Update(msg)
+	if cmd != nil {
+		// Handle any commands if needed
+	}
+	cp.updateFiltered()
+}
+
+// HandleInput processes keyboard input for the command palette
+// Returns: (shouldHide bool, selectedCommand *Command, handled bool)
+func (cp *CommandPalette) HandleInput(msg tea.KeyMsg) (bool, *Command, bool) {
+	if !cp.visible {
+		return false, nil, false
+	}
+
+	switch msg.String() {
+	case "esc":
+		cp.Hide()
+		return true, nil, true
+	case "enter":
+		if cmd := cp.GetSelectedCommand(); cmd != nil {
+			cp.Hide()
+			return true, cmd, true
+		}
+		return false, nil, true
+	case "up":
+		cp.MoveCursor(-1)
+		return false, nil, true
+	case "down":
+		cp.MoveCursor(1)
+		return false, nil, true
+	default:
+		// Let textinput component handle all other input (including copy/paste)
+		cp.UpdateTextInput(msg)
+		return false, nil, true
+	}
 }
 
 func (cp *CommandPalette) MoveCursor(direction int) {
@@ -84,9 +135,10 @@ func (cp *CommandPalette) GetSelectedCommand() *Command {
 	return &cp.filteredCommands[cp.cursor]
 }
 
+
 func (cp *CommandPalette) updateFiltered() {
 	cp.filteredCommands = []Command{}
-	searchTerm := strings.ToLower(cp.input)
+	searchTerm := strings.ToLower(cp.textInput.Value())
 	
 	for _, cmd := range cp.commands {
 		if strings.Contains(strings.ToLower(cmd.Name), searchTerm) ||
@@ -110,13 +162,6 @@ func (cp *CommandPalette) Render(width, height int) string {
 		Padding(1, 2).
 		Background(lipgloss.Color("235"))
 
-	inputStyle := lipgloss.NewStyle().
-		Width(width - 24).
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Background(lipgloss.Color("0"))
-
 	selectedStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("62")).
 		Foreground(lipgloss.Color("230")).
@@ -137,9 +182,8 @@ func (cp *CommandPalette) Render(width, height int) string {
 		Render("Command Palette"))
 	content.WriteString("\n\n")
 	
-	// Input field
-	inputDisplay := cp.input + "█" // Simple cursor
-	content.WriteString(inputStyle.Render(inputDisplay))
+	// Input field using textinput component
+	content.WriteString(cp.textInput.View())
 	content.WriteString("\n\n")
 	
 	// Commands list

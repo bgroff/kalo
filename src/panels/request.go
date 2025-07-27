@@ -2,6 +2,7 @@ package panels
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -93,8 +94,15 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		sections = append(sections, headers)
 		
 		var headersContent strings.Builder
-		for key, value := range currentReq.Headers {
-			headersContent.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+		// Sort headers alphabetically
+		var keys []string
+		for key := range currentReq.Headers {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		
+		for _, key := range keys {
+			headersContent.WriteString(fmt.Sprintf("  %s: %s\n", key, currentReq.Headers[key]))
 		}
 		sections = append(sections, strings.TrimSpace(headersContent.String()))
 	}
@@ -108,8 +116,15 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		sections = append(sections, queryHeader)
 		
 		var queryContent strings.Builder
-		for key, value := range currentReq.Query {
-			queryContent.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
+		// Sort query parameters alphabetically
+		var keys []string
+		for key := range currentReq.Query {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		
+		for _, key := range keys {
+			queryContent.WriteString(fmt.Sprintf("  %s: %s\n", key, currentReq.Query[key]))
 		}
 		sections = append(sections, strings.TrimSpace(queryContent.String()))
 	}
