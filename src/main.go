@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	
+
 	"kalo/src/panels"
 )
 
@@ -26,65 +26,64 @@ type httpResponseMsg struct {
 	err      error
 }
 
-
 type model struct {
-	width           int
-	height          int
-	activePanel     panel
-	collections     []panels.CollectionItem
-	selectedReq     int
-	bruRequests     []*panels.BruRequest
-	currentReq      *panels.BruRequest
-	requestCursor   panels.RequestSection
-	response        string
-	statusCode      int
-	httpClient      *HTTPClient
-	lastResponse    *panels.HTTPResponse
-	isLoading       bool
+	width            int
+	height           int
+	activePanel      panel
+	collections      []panels.CollectionItem
+	selectedReq      int
+	bruRequests      []*panels.BruRequest
+	currentReq       *panels.BruRequest
+	requestCursor    panels.RequestSection
+	response         string
+	statusCode       int
+	httpClient       *HTTPClient
+	lastResponse     *panels.HTTPResponse
+	isLoading        bool
 	responseViewport viewport.Model
-	headersViewport viewport.Model
-	responseCursor  panels.ResponseSection
-	commandPalette  *CommandPalette
+	headersViewport  viewport.Model
+	responseCursor   panels.ResponseSection
+	commandPalette   *CommandPalette
 }
 
 var (
 	focusedStyle = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62"))
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62"))
 
 	blurredStyle = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240"))
 
 	titleStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Padding(0, 1)
+			Background(lipgloss.Color("62")).
+			Foreground(lipgloss.Color("230")).
+			Padding(0, 1)
 
 	methodStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("46")).
-		Foreground(lipgloss.Color("0")).
-		Padding(0, 1).
-		Bold(true)
+			Background(lipgloss.Color("46")).
+			Foreground(lipgloss.Color("0")).
+			Padding(0, 1).
+			Bold(true)
 
 	urlStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86"))
+			Foreground(lipgloss.Color("86"))
 
 	statusOkStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("46")).
-		Foreground(lipgloss.Color("0")).
-		Padding(0, 1)
+			Background(lipgloss.Color("46")).
+			Foreground(lipgloss.Color("0")).
+			Padding(0, 1)
 
 	headerStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		MarginTop(1)
+			Foreground(lipgloss.Color("241")).
+			MarginTop(1)
 
 	cursorStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("212")).
-		Bold(true)
+			Foreground(lipgloss.Color("212")).
+			Bold(true)
 
 	sectionStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86"))
+			Foreground(lipgloss.Color("86"))
 )
 
 func initialModel() model {
@@ -144,10 +143,10 @@ func (m *model) loadBruFiles() {
 			}
 
 			m.bruRequests = append(m.bruRequests, request)
-			
+
 			methodColor := getMethodColor(request.HTTP.Method)
 			displayName := fmt.Sprintf("  %s %s", methodColor, request.Meta.Name)
-			
+
 			m.collections = append(m.collections, panels.CollectionItem{
 				Name:     displayName,
 				Type:     "request",
@@ -200,7 +199,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				if cmd := m.commandPalette.GetSelectedCommand(); cmd != nil {
 					m.commandPalette.Hide()
-					return m, m.executeCommand(cmd.Action)
+					//return m, m.executeCommand(cmd.Action)
 				}
 				return m, nil
 			case "up":
@@ -343,7 +342,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusCode = msg.response.StatusCode
 			m.responseViewport.SetContent(m.response)
 			m.responseViewport.GotoTop()
-			
+
 			// Format headers for display
 			var headersContent strings.Builder
 			if len(msg.response.Headers) > 0 {
@@ -378,15 +377,13 @@ func (m *model) updateCurrentRequest() {
 	}
 }
 
-
-
 func (m *model) executeRequest() tea.Cmd {
 	if m.currentReq == nil {
 		return nil
 	}
 
 	m.isLoading = true
-	
+
 	return func() tea.Msg {
 		response, err := m.httpClient.ExecuteRequest(m.currentReq)
 		return httpResponseMsg{response: response, err: err}
@@ -400,7 +397,7 @@ func (m model) View() string {
 
 	sidebarWidth := m.width / 3
 	mainWidth := m.width - sidebarWidth - 2
-	
+
 	// Account for header (1 line) + footer (1 line) + some padding
 	availableHeight := m.height - 4
 
@@ -414,7 +411,7 @@ func (m model) View() string {
 	)
 
 	header := titleStyle.Width(m.width - 2).Render("Kalo - Bruno API Client")
-	
+
 	var footerText string
 	if m.isLoading {
 		footerText = "Loading... • Tab: Switch panels • q: Quit"
@@ -432,7 +429,6 @@ func (m model) View() string {
 		footer,
 	)
 }
-
 
 func (m model) renderMainArea(width, height int) string {
 	// Account for borders and titles in each panel (roughly 3 lines each)
@@ -452,8 +448,6 @@ func (m model) renderMainArea(width, height int) string {
 
 	return lipgloss.JoinVertical(lipgloss.Left, request, response)
 }
-
-
 
 func main() {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
