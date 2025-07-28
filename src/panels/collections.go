@@ -12,6 +12,8 @@ type CollectionItem struct {
 	IsFolder     bool
 	IsTagGroup   bool
 	RequestIndex int // Index into the bruRequests array, -1 for folders/tag groups
+	IsExpanded   bool // Whether folder/tag is expanded
+	IsVisible    bool // Whether item should be visible (considering parent expansion)
 }
 
 func RenderCollections(width, height int, activePanel bool, vp *viewport.Model, focusedStyle, blurredStyle, titleStyle lipgloss.Style) string {

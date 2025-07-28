@@ -32,7 +32,7 @@ func max(a, b int) int {
 	return b
 }
 
-func RenderResponse(width, height int, activePanel bool, isLoading bool, lastResponse *HTTPResponse, statusCode int, responseCursor ResponseSection, headersViewport, responseViewport *viewport.Model, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle lipgloss.Style) string {
+func RenderResponse(width, height int, activePanel bool, isLoading bool, lastResponse *HTTPResponse, statusCode int, responseCursor ResponseSection, headersViewport, responseViewport *viewport.Model, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle lipgloss.Style, appliedJQFilter string) string {
 	var style lipgloss.Style
 	if activePanel {
 		style = focusedStyle
@@ -121,6 +121,14 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 			scrollPercent = 100
 		}
 		bodyScrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
+		
+		// Add jq filter info if one is applied
+		if appliedJQFilter != "" {
+			bodyScrollInfo += fmt.Sprintf(" (jq: %s)", appliedJQFilter)
+		}
+	} else if appliedJQFilter != "" {
+		// Show jq filter even if no scroll info
+		bodyScrollInfo = fmt.Sprintf(" (jq: %s)", appliedJQFilter)
 	}
 	
 	bodyTitle := bodyCursor + sectionStyle.Render("Response Body:") + bodyScrollInfo

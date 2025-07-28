@@ -40,6 +40,19 @@ type jqFilterMsg struct {
 	err    error
 }
 
+type FilterType string
+
+const (
+	JQFilter          FilterType = "jq"
+	CollectionsFilter FilterType = "collections"
+)
+
+type filterMsg struct {
+	filterType FilterType
+	result     string
+	err        error
+}
+
 type model struct {
 	width            int
 	height           int
@@ -61,6 +74,13 @@ type model struct {
 	originalResponse string // Store original response for jq filtering
 	commandPalette   *CommandPalette
 	inputDialog      *InputDialog
+	filterMode       bool
+	filterType       FilterType
+	filterInput      string
+	originalCollections []panels.CollectionItem // Store original collections for filtering
+	lastJQFilter     string // Remember last jq filter
+	lastCollectionsFilter string // Remember last collections filter
+	appliedJQFilter  string // Currently applied jq filter for display
 }
 
 var (
@@ -291,6 +311,8 @@ func (m *model) loadBruFiles() {
 			IsFolder:     true,
 			IsTagGroup:   false,
 			RequestIndex: -1,
+			IsExpanded:   false, // Collapsed by default
+			IsVisible:    true,  // Folders are always visible
 		})
 
 		// Get sorted tag names
@@ -319,6 +341,8 @@ func (m *model) loadBruFiles() {
 					IsFolder:     false,
 					IsTagGroup:   true,
 					RequestIndex: -1,
+					IsExpanded:   false, // Collapsed by default
+					IsVisible:    false, // Hidden when parent folder is collapsed
 				})
 			}
 
@@ -338,6 +362,8 @@ func (m *model) loadBruFiles() {
 					IsFolder:     false,
 					IsTagGroup:   false,
 					RequestIndex: requestIndexMap[request],
+					IsExpanded:   false, // Not applicable for requests
+					IsVisible:    false, // Hidden when parent tag/folder is collapsed
 				})
 			}
 		}
@@ -372,6 +398,8 @@ func (m *model) loadBruFiles() {
 					IsFolder:     false,
 					IsTagGroup:   true,
 					RequestIndex: -1,
+					IsExpanded:   false, // Collapsed by default
+					IsVisible:    true,  // Root tags are visible
 				})
 			}
 
@@ -391,6 +419,8 @@ func (m *model) loadBruFiles() {
 					IsFolder:     false,
 					IsTagGroup:   false,
 					RequestIndex: requestIndexMap[request],
+					IsExpanded:   false, // Not applicable for requests
+					IsVisible:    false, // Hidden when parent tag/folder is collapsed
 				})
 			}
 		}
@@ -400,35 +430,141 @@ func (m *model) loadBruFiles() {
 		m.currentReq = m.bruRequests[0]
 	}
 	
+	// Update visibility based on expansion state
+	m.updateVisibility()
+	
+	// Ensure selected item is visible
+	if m.selectedReq >= 0 && m.selectedReq < len(m.collections) && !m.collections[m.selectedReq].IsVisible {
+		// Find first visible item
+		for i := 0; i < len(m.collections); i++ {
+			if m.collections[i].IsVisible {
+				m.selectedReq = i
+				break
+			}
+		}
+	}
+	
 	// Update collections viewport content
 	m.updateCollectionsViewport()
 }
 
+func (m *model) toggleExpansion(index int) {
+	if index < 0 || index >= len(m.collections) {
+		return
+	}
+	
+	item := &m.collections[index]
+	if !item.IsFolder && !item.IsTagGroup {
+		return
+	}
+	
+	// Toggle expansion state
+	item.IsExpanded = !item.IsExpanded
+	
+	// Update visibility of child items
+	m.updateVisibility()
+}
+
+func (m *model) updateVisibility() {
+	for i := range m.collections {
+		item := &m.collections[i]
+		
+		if item.IsFolder {
+			// Folders are always visible
+			item.IsVisible = true
+		} else if item.IsTagGroup {
+			// Tag groups are visible if their parent folder is expanded (or if they're root tags)
+			item.IsVisible = true
+			
+			// Find parent folder
+			for j := i - 1; j >= 0; j-- {
+				if m.collections[j].IsFolder {
+					item.IsVisible = m.collections[j].IsExpanded
+					break
+				}
+			}
+		} else {
+			// Requests are visible if their parent tag group is expanded
+			item.IsVisible = false
+			
+			// Find parent tag group
+			for j := i - 1; j >= 0; j-- {
+				parentItem := &m.collections[j]
+				if parentItem.IsTagGroup {
+					item.IsVisible = parentItem.IsExpanded
+					break
+				}
+				if parentItem.IsFolder {
+					// If we hit a folder before finding a tag group, this is a direct child of folder
+					item.IsVisible = parentItem.IsExpanded
+					break
+				}
+			}
+		}
+	}
+}
+
 func (m *model) updateCollectionsViewport() {
 	var items []string
+	visibleIndex := 0
+	selectedVisibleIndex := -1
+	
 	for i, item := range m.collections {
-		if i == m.selectedReq {
-			items = append(items, "> "+item.Name)
-		} else {
-			items = append(items, "  "+item.Name)
+		if !item.IsVisible {
+			continue
 		}
+		
+		// Track which visible item corresponds to the selected index
+		if i == m.selectedReq {
+			selectedVisibleIndex = visibleIndex
+		}
+		
+		// Add expand/collapse indicator for folders and tag groups
+		displayName := item.Name
+		if item.IsFolder || item.IsTagGroup {
+			// Extract existing indentation and content
+			indentLevel := ""
+			content := displayName
+			
+			// Find where the actual content starts (after spaces)
+			for i, char := range displayName {
+				if char != ' ' {
+					indentLevel = displayName[:i]
+					content = displayName[i:]
+					break
+				}
+			}
+			
+			// Add +/- at the same indentation level
+			if item.IsExpanded {
+				displayName = indentLevel + "- " + content
+			} else {
+				displayName = indentLevel + "+ " + content
+			}
+		}
+		
+		if i == m.selectedReq {
+			items = append(items, "> "+displayName)
+		} else {
+			items = append(items, "  "+displayName)
+		}
+		visibleIndex++
 	}
 	
 	content := strings.Join(items, "\n")
 	m.collectionsViewport.SetContent(content)
 	
-	// Ensure the selected item is visible
-	if m.selectedReq >= 0 && m.selectedReq < len(m.collections) {
-		// Calculate the line position and ensure it's visible
+	// Ensure the selected item is visible (use visible index for scrolling)
+	if selectedVisibleIndex >= 0 {
 		viewportHeight := m.collectionsViewport.Height
 		
 		// If selected item is below the visible area, scroll down
-		if m.selectedReq >= m.collectionsViewport.YOffset+viewportHeight {
-			m.collectionsViewport.SetYOffset(m.selectedReq - viewportHeight + 1)
+		if selectedVisibleIndex >= m.collectionsViewport.YOffset+viewportHeight {
+			m.collectionsViewport.SetYOffset(selectedVisibleIndex - viewportHeight + 1)
 		}
 		// If selected item is above the visible area, scroll up
-		if m.selectedReq < m.collectionsViewport.YOffset {
-			m.collectionsViewport.SetYOffset(m.selectedReq)
+		if selectedVisibleIndex < m.collectionsViewport.YOffset {
+			m.collectionsViewport.SetYOffset(selectedVisibleIndex)
 		}
 	}
 }
@@ -450,24 +586,81 @@ func getMethodColor(method string) string {
 	}
 }
 
-func (m *model) applyJqFilterWithInput(filter string) tea.Cmd {
-	if m.originalResponse == "" || filter == "" {
+func (m *model) startFilter(filterType FilterType) {
+	m.filterMode = true
+	m.filterType = filterType
+	
+	// Restore previous filter input
+	switch filterType {
+	case JQFilter:
+		m.filterInput = m.lastJQFilter
+	case CollectionsFilter:
+		m.filterInput = m.lastCollectionsFilter
+	default:
+		m.filterInput = ""
+	}
+	
+	// Store original data based on filter type
+	if filterType == CollectionsFilter && len(m.originalCollections) == 0 {
+		m.originalCollections = make([]panels.CollectionItem, len(m.collections))
+		copy(m.originalCollections, m.collections)
+	}
+}
+
+func (m *model) exitFilter() {
+	// Save the current filter input before exiting
+	switch m.filterType {
+	case JQFilter:
+		m.lastJQFilter = m.filterInput
+	case CollectionsFilter:
+		m.lastCollectionsFilter = m.filterInput
+	}
+	
+	m.filterMode = false
+	m.filterInput = ""
+	
+	// Restore original data if needed
+	if m.filterType == CollectionsFilter && len(m.originalCollections) > 0 {
+		m.collections = make([]panels.CollectionItem, len(m.originalCollections))
+		copy(m.collections, m.originalCollections)
+		m.updateCollectionsViewport()
+	}
+}
+
+func (m *model) applyFilter() tea.Cmd {
+	if m.filterInput == "" {
 		return nil
 	}
 
+	switch m.filterType {
+	case JQFilter:
+		return m.applyJqFilter()
+	case CollectionsFilter:
+		return m.applyCollectionsFilter()
+	default:
+		return nil
+	}
+}
+
+func (m *model) applyJqFilter() tea.Cmd {
+	if m.originalResponse == "" {
+		return nil
+	}
+
+	filter := m.filterInput
 	originalData := m.originalResponse
 
 	return func() tea.Msg {
 		// Parse the jq query
 		query, err := gojq.Parse(filter)
 		if err != nil {
-			return jqFilterMsg{err: fmt.Errorf("jq parse error: %v", err)}
+			return filterMsg{filterType: JQFilter, err: fmt.Errorf("jq parse error: %v", err)}
 		}
 
 		// Parse the JSON
 		var jsonData interface{}
 		if err := json.Unmarshal([]byte(originalData), &jsonData); err != nil {
-			return jqFilterMsg{err: fmt.Errorf("JSON parse error: %v", err)}
+			return filterMsg{filterType: JQFilter, err: fmt.Errorf("JSON parse error: %v", err)}
 		}
 
 		// Apply the filter
@@ -479,7 +672,7 @@ func (m *model) applyJqFilterWithInput(filter string) tea.Cmd {
 				break
 			}
 			if err, ok := v.(error); ok {
-				return jqFilterMsg{err: fmt.Errorf("jq filter error: %v", err)}
+				return filterMsg{filterType: JQFilter, err: fmt.Errorf("jq filter error: %v", err)}
 			}
 			results = append(results, v)
 		}
@@ -497,10 +690,125 @@ func (m *model) applyJqFilterWithInput(filter string) tea.Cmd {
 		// Convert back to pretty JSON
 		resultBytes, err := json.MarshalIndent(resultData, "", "  ")
 		if err != nil {
-			return jqFilterMsg{err: fmt.Errorf("JSON marshal error: %v", err)}
+			return filterMsg{filterType: JQFilter, err: fmt.Errorf("JSON marshal error: %v", err)}
 		}
 
-		return jqFilterMsg{result: string(resultBytes)}
+		return filterMsg{filterType: JQFilter, result: string(resultBytes)}
+	}
+}
+
+func (m *model) applyCollectionsFilter() tea.Cmd {
+	if len(m.originalCollections) == 0 {
+		return nil
+	}
+
+	filter := strings.ToLower(m.filterInput)
+
+	return func() tea.Msg {
+		var filteredCollections []panels.CollectionItem
+		
+		for _, item := range m.originalCollections {
+			// Always include folders and tag groups
+			if item.IsFolder || item.IsTagGroup {
+				filteredCollections = append(filteredCollections, item)
+				continue
+			}
+			
+			// Filter requests by name (case-insensitive)
+			if strings.Contains(strings.ToLower(item.Name), filter) {
+				filteredCollections = append(filteredCollections, item)
+			}
+		}
+
+		return filterMsg{filterType: CollectionsFilter, result: fmt.Sprintf("Found %d matches", len(filteredCollections))}
+	}
+}
+
+func (m *model) applyCollectionsFilterResult() {
+	if len(m.originalCollections) == 0 {
+		return
+	}
+
+	// If filter is empty, restore all collections and collapse them
+	if m.filterInput == "" {
+		m.collections = make([]panels.CollectionItem, len(m.originalCollections))
+		copy(m.collections, m.originalCollections)
+		
+		// Reset expansion state to collapsed
+		for i := range m.collections {
+			if m.collections[i].IsFolder || m.collections[i].IsTagGroup {
+				m.collections[i].IsExpanded = false
+			}
+		}
+		
+		// Update visibility and reset selection
+		m.updateVisibility()
+		if m.selectedReq >= len(m.collections) {
+			m.selectedReq = 0
+		}
+		// Find first visible item
+		for i := 0; i < len(m.collections); i++ {
+			if m.collections[i].IsVisible {
+				m.selectedReq = i
+				break
+			}
+		}
+		return
+	}
+
+	filter := strings.ToLower(m.filterInput)
+	var filteredCollections []panels.CollectionItem
+	var currentFolder *panels.CollectionItem
+	var currentTagGroup *panels.CollectionItem
+	var hasMatchingRequests bool
+	
+	for _, item := range m.originalCollections {
+		if item.IsFolder {
+			// Store current folder, add it later if it has matching requests
+			currentFolder = &item
+			currentTagGroup = nil
+			hasMatchingRequests = false
+		} else if item.IsTagGroup {
+			// Store current tag group, add it later if it has matching requests  
+			currentTagGroup = &item
+			hasMatchingRequests = false
+		} else {
+			// This is a request - check if it matches the filter
+			if strings.Contains(strings.ToLower(item.Name), filter) {
+				// Add the folder if we haven't added it yet and expand it
+				if currentFolder != nil && !hasMatchingRequests {
+					expandedFolder := *currentFolder
+					expandedFolder.IsExpanded = true
+					filteredCollections = append(filteredCollections, expandedFolder)
+				}
+				// Add the tag group if we haven't added it yet and expand it
+				if currentTagGroup != nil && !hasMatchingRequests {
+					expandedTagGroup := *currentTagGroup
+					expandedTagGroup.IsExpanded = true
+					filteredCollections = append(filteredCollections, expandedTagGroup)
+				}
+				// Add the matching request
+				filteredCollections = append(filteredCollections, item)
+				hasMatchingRequests = true
+			}
+		}
+	}
+
+	m.collections = filteredCollections
+	
+	// Update visibility to show expanded items
+	m.updateVisibility()
+	
+	// Reset selection to first item if current selection is out of bounds
+	if m.selectedReq >= len(m.collections) {
+		m.selectedReq = 0
+	}
+	// Find first visible item
+	for i := 0; i < len(m.collections); i++ {
+		if m.collections[i].IsVisible {
+			m.selectedReq = i
+			break
+		}
 	}
 }
 
@@ -515,6 +823,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		// Handle filter mode first (highest priority after input dialog)
+		if m.filterMode {
+			switch msg.String() {
+			case "esc":
+				m.exitFilter()
+				return m, nil
+			case "enter":
+				// For jq filter, apply the filter and exit
+				if m.filterType == JQFilter {
+					cmd := m.applyFilter()
+					m.exitFilter()
+					return m, cmd
+				}
+				// For collections filter, apply and exit filter mode but keep filtered results
+				if m.filterType == CollectionsFilter {
+					// Save the filter input
+					m.lastCollectionsFilter = m.filterInput
+					// Filter is already applied in real-time, just exit filter mode
+					m.filterMode = false
+					m.filterInput = ""
+					// Don't call m.exitFilter() as that would restore original collections
+					return m, nil
+				}
+				return m, nil
+			case "backspace":
+				if len(m.filterInput) > 0 {
+					m.filterInput = m.filterInput[:len(m.filterInput)-1]
+					// Apply collections filter in real-time
+					if m.filterType == CollectionsFilter {
+						m.applyCollectionsFilterResult()
+						m.updateCollectionsViewport()
+					}
+				}
+				return m, nil
+			default:
+				// Add character to filter input
+				if len(msg.String()) == 1 && msg.String() >= " " && msg.String() <= "~" {
+					m.filterInput += msg.String()
+					// Apply collections filter in real-time
+					if m.filterType == CollectionsFilter {
+						m.applyCollectionsFilterResult()
+						m.updateCollectionsViewport()
+					}
+				}
+				return m, nil
+			}
+		}
+
 		// Handle input dialog first (highest priority)
 		if m.inputDialog.IsVisible() {
 			switch msg.String() {
@@ -569,7 +925,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "up":
 			if m.activePanel == collectionsPanel && m.selectedReq > 0 {
-				m.selectedReq--
+				// Find previous visible item
+				for i := m.selectedReq - 1; i >= 0; i-- {
+					if m.collections[i].IsVisible {
+						m.selectedReq = i
+						break
+					}
+				}
 				m.updateCurrentRequest()
 				m.updateCollectionsViewport()
 			} else if m.activePanel == requestPanel {
@@ -585,7 +947,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "down":
 			if m.activePanel == collectionsPanel && m.selectedReq < len(m.collections)-1 {
-				m.selectedReq++
+				// Find next visible item
+				for i := m.selectedReq + 1; i < len(m.collections); i++ {
+					if m.collections[i].IsVisible {
+						m.selectedReq = i
+						break
+					}
+				}
 				m.updateCurrentRequest()
 				m.updateCollectionsViewport()
 			} else if m.activePanel == requestPanel {
@@ -602,8 +970,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.activePanel == collectionsPanel {
-				m.updateCurrentRequest()
-				m.updateCollectionsViewport()
+				// Check if selected item is a folder or tag group
+				if m.selectedReq >= 0 && m.selectedReq < len(m.collections) {
+					item := m.collections[m.selectedReq]
+					if item.IsFolder || item.IsTagGroup {
+						// Toggle expand/collapse
+						m.toggleExpansion(m.selectedReq)
+						m.updateCollectionsViewport()
+					} else {
+						// Regular request - update current request
+						m.updateCurrentRequest()
+						m.updateCollectionsViewport()
+					}
+				}
 			} else if m.activePanel == requestPanel {
 				return m, m.executeRequest()
 			}
@@ -678,10 +1057,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Direct shortcut to create new request
 			return m, m.executeCommand("new_request")
 		case "ctrl+j":
-			// Open jq filter modal for JSON responses
+			// Start jq filter for JSON responses
 			if m.activePanel == responsePanel && m.lastResponse != nil && m.lastResponse.IsJSON {
-				return m, m.executeCommand("jq_filter")
+				m.startFilter(JQFilter)
+				return m, nil
 			}
+		case "ctrl+f":
+			// Start collections filter
+			if m.activePanel == collectionsPanel {
+				m.startFilter(CollectionsFilter)
+				return m, nil
+			}
+		case "ctrl+r":
+			// Reset collections filter
+			if m.activePanel == collectionsPanel && len(m.originalCollections) > 0 {
+				m.collections = make([]panels.CollectionItem, len(m.originalCollections))
+				copy(m.collections, m.originalCollections)
+				m.originalCollections = nil
+				m.selectedReq = 0
+				m.lastCollectionsFilter = "" // Clear stored filter
+				m.updateCollectionsViewport()
+				return m, nil
+			}
+			// Reset jq filter
+			if m.activePanel == responsePanel && m.appliedJQFilter != "" {
+				// Restore original response
+				m.response = m.httpClient.FormatResponseForDisplay(m.lastResponse)
+				m.responseViewport.SetContent(m.response)
+				m.responseViewport.GotoTop()
+				m.appliedJQFilter = ""
+				m.lastJQFilter = "" // Clear stored filter
+				return m, nil
+			}
+		case "1":
+			// Jump to response body
+			m.activePanel = responsePanel
+			m.responseCursor = panels.ResponseBodySection
+			return m, nil
 		}
 		
 	case httpResponseMsg:
@@ -698,6 +1110,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusCode = msg.response.StatusCode
 			m.responseViewport.SetContent(m.response)
 			m.responseViewport.GotoTop()
+			m.appliedJQFilter = "" // Clear applied jq filter for new response
 
 			// Format headers for display
 			var headersContent strings.Builder
@@ -734,6 +1147,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.response = msg.result
 			m.responseViewport.SetContent(m.response)
 			m.responseViewport.GotoTop()
+		}
+		return m, nil
+	case filterMsg:
+		if msg.err != nil {
+			if msg.filterType == JQFilter {
+				// Show error in response viewport
+				m.responseViewport.SetContent(fmt.Sprintf("jq Error: %v", msg.err))
+			}
+			// For collections filter errors, we could show in footer or ignore
+		} else {
+			if msg.filterType == JQFilter {
+				// Show filtered result and save applied filter
+				m.response = msg.result
+				m.responseViewport.SetContent(m.response)
+				m.responseViewport.GotoTop()
+				m.appliedJQFilter = m.lastJQFilter // Use the saved filter from exitFilter
+			} else if msg.filterType == CollectionsFilter {
+				// Apply filtered collections
+				m.applyCollectionsFilterResult()
+				m.updateCollectionsViewport()
+			}
 		}
 		return m, nil
 	}
@@ -867,16 +1301,6 @@ func (m *model) executeCommand(action string) tea.Cmd {
 			Type:   OpenAPIImportInput,
 			Title:  "Import OpenAPI Specification",
 			Action: action,
-		}
-		m.inputDialog.Show(spec)
-		return nil
-	case "jq_filter":
-		spec := InputSpec{
-			Type:        TextInput,
-			Title:       "jq Filter",
-			Prompt:      "Enter jq expression:",
-			Placeholder: ".data | .items[]",
-			Action:      action,
 		}
 		m.inputDialog.Show(spec)
 		return nil
@@ -1019,12 +1443,6 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 			}
 		}
 		return nil
-	case "jq_filter":
-		if input != "" {
-			// Apply jq filter to stored original response
-			return m.applyJqFilterWithInput(input)
-		}
-		return nil
 	default:
 		return nil
 	}
@@ -1053,12 +1471,29 @@ func (m model) View() string {
 	header := titleStyle.Width(m.width - 2).Render("Kalo - Bruno API Client")
 
 	var footerText string
-	if m.isLoading {
+	if m.filterMode {
+		filterName := ""
+		switch m.filterType {
+		case JQFilter:
+			filterName = "jq"
+		case CollectionsFilter:
+			filterName = "search"
+		}
+		footerText = fmt.Sprintf("%s filter: %s_ • Enter: Apply • Esc: Cancel", filterName, m.filterInput)
+	} else if m.isLoading {
 		footerText = "Loading... • Tab: Switch panels • p: Command Palette • q: Quit"
 	} else if m.activePanel == responsePanel {
-		footerText = "Tab: Switch panels • ←→: Switch Headers/Body • ↑↓: Scroll • Space/PgDn/PgUp/Home/End • s: Send • p: Command Palette • q: Quit"
+		if m.appliedJQFilter != "" {
+			footerText = "Tab: Switch panels • ←→: Switch Headers/Body • ↑↓: Scroll • Space/PgDn/PgUp/Home/End • s: Send • Ctrl+j: jq filter • Ctrl+r: Reset filter • p: Command Palette • q: Quit"
+		} else {
+			footerText = "Tab: Switch panels • ←→: Switch Headers/Body • ↑↓: Scroll • Space/PgDn/PgUp/Home/End • s: Send • Ctrl+j: jq filter • p: Command Palette • q: Quit"
+		}
 	} else if m.activePanel == collectionsPanel {
-		footerText = "Tab: Switch panels • ↑↓: Navigate • PgUp/PgDn/Home/End: Scroll • Enter/Space/s: Execute • p: Command Palette • q: Quit"
+		if len(m.originalCollections) > 0 && len(m.collections) != len(m.originalCollections) {
+			footerText = "Tab: Switch panels • ↑↓: Navigate • PgUp/PgDn/Home/End: Scroll • Enter/Space/s: Execute • Ctrl+f: Search • Ctrl+r: Reset filter • p: Command Palette • q: Quit"
+		} else {
+			footerText = "Tab: Switch panels • ↑↓: Navigate • PgUp/PgDn/Home/End: Scroll • Enter/Space/s: Execute • Ctrl+f: Search • p: Command Palette • q: Quit"
+		}
 	} else {
 		footerText = "Tab: Switch panels • ↑↓: Navigate • Enter/Space/s: Execute • p: Command Palette • q: Quit"
 	}
@@ -1100,7 +1535,7 @@ func (m model) renderMainArea(width, height int) string {
 	}
 
 	request := panels.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, focusedStyle, blurredStyle, titleStyle, cursorStyle, methodStyle, urlStyle, sectionStyle)
-	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, &m.headersViewport, &m.responseViewport, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle)
+	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, &m.headersViewport, &m.responseViewport, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle, m.appliedJQFilter)
 
 	return lipgloss.JoinVertical(lipgloss.Left, request, response)
 }
