@@ -77,18 +77,18 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 
 	var sections []string
 
-	urlCursor := ""
+	// Method and URL are now shown in the title, but we need to handle the cursor for URL section
 	if activePanel && requestCursor == URLSection {
-		urlCursor = cursorStyle.Render("► ")
+		urlCursor := cursorStyle.Render("► ")
+		methodAndUrl := lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			urlCursor,
+			methodStyle.Render(currentReq.HTTP.Method),
+			" ",
+			urlStyle.Render(currentReq.HTTP.URL),
+		)
+		sections = append(sections, methodAndUrl)
 	}
-	methodAndUrl := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		urlCursor,
-		methodStyle.Render(currentReq.HTTP.Method),
-		" ",
-		urlStyle.Render(currentReq.HTTP.URL),
-	)
-	sections = append(sections, methodAndUrl)
 
 	if len(currentReq.Headers) > 0 {
 		headersCursor := ""
@@ -159,7 +159,17 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		sections = append(sections, "  "+currentReq.Body.Data)
 	}
 
-	title := titleStyle.Render(" Request ")
+	// Create title with method and URL
+	titleContent := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		" Request ",
+		"│ ",
+		methodStyle.Render(currentReq.HTTP.Method),
+		" ",
+		urlStyle.Render(currentReq.HTTP.URL),
+		" ",
+	)
+	title := titleStyle.Render(titleContent)
 	titleBar := lipgloss.NewStyle().
 		Width(width-2).
 		Align(lipgloss.Left).

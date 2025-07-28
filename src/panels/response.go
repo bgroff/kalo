@@ -2,6 +2,7 @@ package panels
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -40,38 +41,6 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 		style = blurredStyle
 	}
 	
-	var status string
-	if isLoading {
-		status = "⏳ Loading..."
-	} else if lastResponse != nil {
-		var statusStyle lipgloss.Style
-		if statusCode >= 200 && statusCode < 300 {
-			statusStyle = statusOkStyle
-		} else if statusCode >= 400 {
-			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("196")).Foreground(lipgloss.Color("0")).Padding(0, 1)
-		} else {
-			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("214")).Foreground(lipgloss.Color("0")).Padding(0, 1)
-		}
-		
-		timing := ""
-		if lastResponse.ResponseTime > 0 {
-			timing = fmt.Sprintf(" • %v", lastResponse.ResponseTime)
-		}
-		
-		statusText := lastResponse.Status
-		if statusText == "" {
-			statusText = fmt.Sprintf("%d", statusCode)
-		}
-		
-		status = lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			statusStyle.Render(statusText),
-			timing,
-		)
-	} else {
-		status = statusOkStyle.Render("200 OK") + " • Mock Response"
-	}
-
 	// Calculate available space for both viewports
 	availableHeight := height - 6 // Account for padding, borders, status line
 	headersHeight := availableHeight / 3  // 1/3 for headers
@@ -133,7 +102,59 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 	
 	bodyTitle := bodyCursor + sectionStyle.Render("Response Body:") + bodyScrollInfo
 
-	title := titleStyle.Render(" Response ")
+	// Create title with status, timing, and MIME type
+	var titleContent string
+	if isLoading {
+		titleContent = " Response │ ⏳ Loading..."
+	} else if lastResponse != nil {
+		// Extract MIME type from Content-Type header
+		contentType := ""
+		if ct, exists := lastResponse.Headers["Content-Type"]; exists {
+			// Extract just the MIME type part (before semicolon if present)
+			if idx := strings.Index(ct, ";"); idx != -1 {
+				contentType = strings.TrimSpace(ct[:idx])
+			} else {
+				contentType = strings.TrimSpace(ct)
+			}
+		}
+		
+		var statusStyle lipgloss.Style
+		if statusCode >= 200 && statusCode < 300 {
+			statusStyle = statusOkStyle
+		} else if statusCode >= 400 {
+			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("196")).Foreground(lipgloss.Color("0")).Padding(0, 1)
+		} else {
+			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("214")).Foreground(lipgloss.Color("0")).Padding(0, 1)
+		}
+		
+		statusText := lastResponse.Status
+		if statusText == "" {
+			statusText = fmt.Sprintf("%d", statusCode)
+		}
+		
+		timing := ""
+		if lastResponse.ResponseTime > 0 {
+			timing = fmt.Sprintf(" • %v", lastResponse.ResponseTime)
+		}
+		
+		mimeInfo := ""
+		if contentType != "" {
+			mimeInfo = fmt.Sprintf(" • %s", contentType)
+		}
+		
+		titleContent = lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			" Response │ ",
+			statusStyle.Render(statusText),
+			timing,
+			mimeInfo,
+			" ",
+		)
+	} else {
+		titleContent = " Response │ " + statusOkStyle.Render("200 OK") + " • Mock Response"
+	}
+	
+	title := titleStyle.Render(titleContent)
 	titleBar := lipgloss.NewStyle().
 		Width(width-2).
 		Align(lipgloss.Left).
@@ -141,7 +162,6 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 
 	responseContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		status,
 		headersTitle,
 		headersViewport.View(),
 		bodyTitle,
