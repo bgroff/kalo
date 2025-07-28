@@ -81,6 +81,10 @@ type model struct {
 	lastJQFilter     string // Remember last jq filter
 	lastCollectionsFilter string // Remember last collections filter
 	appliedJQFilter  string // Currently applied jq filter for display
+	jqSuggestions    []string // Available jq suggestions
+	selectedSuggestion int   // Currently selected suggestion index
+	showSuggestions  bool    // Whether to show the suggestions popup
+	filterCursorPos  int     // Cursor position in filter input
 }
 
 var (
@@ -594,17 +598,281 @@ func (m *model) startFilter(filterType FilterType) {
 	switch filterType {
 	case JQFilter:
 		m.filterInput = m.lastJQFilter
+		// Generate suggestions for jq filter
+		m.generateJQSuggestions()
+		m.showSuggestions = true
+		m.selectedSuggestion = 0
 	case CollectionsFilter:
 		m.filterInput = m.lastCollectionsFilter
 	default:
 		m.filterInput = ""
 	}
 	
+	// Set cursor to end of input
+	m.filterCursorPos = len(m.filterInput)
+	
 	// Store original data based on filter type
 	if filterType == CollectionsFilter && len(m.originalCollections) == 0 {
 		m.originalCollections = make([]panels.CollectionItem, len(m.collections))
 		copy(m.originalCollections, m.collections)
 	}
+}
+
+func (m *model) generateJQSuggestions() {
+	m.jqSuggestions = []string{}
+	
+	// Basic jq operations
+	basicSuggestions := []string{
+		".",
+		".[]",
+		".[0]",
+		"length",
+		"keys",
+		"keys[]",
+		"type",
+		"empty",
+		"map(.)",
+		"select(.)",
+		"sort",
+		"reverse",
+		"unique",
+		"group_by(.)",
+		"min",
+		"max",
+		"add",
+	}
+	
+	m.jqSuggestions = append(m.jqSuggestions, basicSuggestions...)
+	
+	// Extract field suggestions from current JSON
+	if m.originalResponse != "" {
+		fieldSuggestions := m.extractJSONFields(m.originalResponse, "")
+		m.jqSuggestions = append(m.jqSuggestions, fieldSuggestions...)
+	}
+}
+
+func (m *model) extractJSONFields(jsonStr string, prefix string) []string {
+	var suggestions []string
+	var data interface{}
+	
+	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		return suggestions
+	}
+	
+	suggestions = m.extractFieldsFromValue(data, prefix, 0)
+	return suggestions
+}
+
+func (m *model) extractFieldsFromValue(value interface{}, prefix string, depth int) []string {
+	var suggestions []string
+	
+	// Limit depth to avoid infinite recursion and too many suggestions
+	if depth > 3 {
+		return suggestions
+	}
+	
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, subValue := range v {
+			fieldPath := prefix + "." + key
+			if prefix == "" {
+				fieldPath = "." + key
+			}
+			suggestions = append(suggestions, fieldPath)
+			
+			// Add array access for arrays
+			if _, isArray := subValue.([]interface{}); isArray {
+				suggestions = append(suggestions, fieldPath+"[]")
+				suggestions = append(suggestions, fieldPath+"[0]")
+			}
+			
+			// Recursively get nested fields (limited depth)
+			if depth < 2 {
+				nestedSuggestions := m.extractFieldsFromValue(subValue, fieldPath, depth+1)
+				suggestions = append(suggestions, nestedSuggestions...)
+			}
+		}
+	case []interface{}:
+		if len(v) > 0 {
+			// Get fields from first array element
+			if depth < 2 {
+				nestedSuggestions := m.extractFieldsFromValue(v[0], prefix+"[]", depth+1)
+				suggestions = append(suggestions, nestedSuggestions...)
+			}
+		}
+	}
+	
+	return suggestions
+}
+
+func (m *model) getFilteredSuggestions() []string {
+	// Regenerate suggestions based on current input context
+	m.generateContextualSuggestions()
+	
+	if m.filterInput == "" {
+		return m.jqSuggestions
+	}
+	
+	var filtered []string
+	input := strings.ToLower(m.filterInput)
+	
+	for _, suggestion := range m.jqSuggestions {
+		if strings.Contains(strings.ToLower(suggestion), input) ||
+		   strings.HasPrefix(strings.ToLower(suggestion), input) {
+			filtered = append(filtered, suggestion)
+		}
+	}
+	
+	return filtered
+}
+
+func (m *model) generateContextualSuggestions() {
+	// Start with basic suggestions
+	m.generateJQSuggestions()
+	
+	// Add contextual suggestions based on current input
+	if m.originalResponse != "" && m.filterInput != "" {
+		contextSuggestions := m.getContextualCompletions(m.filterInput)
+		m.jqSuggestions = append(m.jqSuggestions, contextSuggestions...)
+	}
+}
+
+func (m *model) getContextualCompletions(input string) []string {
+	var suggestions []string
+	
+	// If input ends with a dot, suggest fields for that path
+	if strings.HasSuffix(input, ".") {
+		pathSuggestions := m.getFieldsForPath(input[:len(input)-1])
+		for _, field := range pathSuggestions {
+			suggestions = append(suggestions, input+field)
+		}
+	}
+	
+	// If input looks like a partial field path, suggest completions
+	if strings.Contains(input, ".") && !strings.HasSuffix(input, ".") {
+		lastDotIndex := strings.LastIndex(input, ".")
+		if lastDotIndex >= 0 {
+			basePath := input[:lastDotIndex]
+			partialField := input[lastDotIndex+1:]
+			
+			pathFields := m.getFieldsForPath(basePath)
+			for _, field := range pathFields {
+				if strings.HasPrefix(strings.ToLower(field), strings.ToLower(partialField)) {
+					suggestions = append(suggestions, basePath+"."+field)
+				}
+			}
+		}
+	}
+	
+	return suggestions
+}
+
+func (m *model) getFieldsForPath(path string) []string {
+	var fields []string
+	var data interface{}
+	
+	if err := json.Unmarshal([]byte(m.originalResponse), &data); err != nil {
+		return fields
+	}
+	
+	// Navigate to the specified path
+	current := data
+	if path != "" && path != "." {
+		pathParts := strings.Split(strings.TrimPrefix(path, "."), ".")
+		for _, part := range pathParts {
+			if part == "" {
+				continue
+			}
+			
+			// Handle array notation
+			if strings.HasSuffix(part, "[]") {
+				part = part[:len(part)-2]
+				if obj, ok := current.(map[string]interface{}); ok {
+					if arr, ok := obj[part].([]interface{}); ok && len(arr) > 0 {
+						current = arr[0] // Use first element as template
+					} else {
+						return fields
+					}
+				} else {
+					return fields
+				}
+			} else {
+				if obj, ok := current.(map[string]interface{}); ok {
+					if val, exists := obj[part]; exists {
+						current = val
+					} else {
+						return fields
+					}
+				} else {
+					return fields
+				}
+			}
+		}
+	}
+	
+	// Extract fields from current object
+	if obj, ok := current.(map[string]interface{}); ok {
+		for key, value := range obj {
+			fields = append(fields, key)
+			
+			// Add array notation for arrays
+			if _, isArray := value.([]interface{}); isArray {
+				fields = append(fields, key+"[]")
+				fields = append(fields, key+"[0]")
+			}
+		}
+	}
+	
+	return fields
+}
+
+func (m *model) findPreviousWordBoundary(input string, pos int) int {
+	if pos <= 0 {
+		return 0
+	}
+	
+	// Word boundaries for jq expressions: ., [, ]
+	wordBoundaries := []rune{'.', '[', ']'}
+	
+	// Start from position before cursor
+	for i := pos - 1; i >= 0; i-- {
+		char := rune(input[i])
+		for _, boundary := range wordBoundaries {
+			if char == boundary {
+				// Found a boundary, position cursor after it (unless at start)
+				if i == 0 {
+					return 0
+				}
+				return i + 1
+			}
+		}
+	}
+	
+	// No boundary found, go to start
+	return 0
+}
+
+func (m *model) findNextWordBoundary(input string, pos int) int {
+	if pos >= len(input) {
+		return len(input)
+	}
+	
+	// Word boundaries for jq expressions: ., [, ]
+	wordBoundaries := []rune{'.', '[', ']'}
+	
+	// Start from current position
+	for i := pos; i < len(input); i++ {
+		char := rune(input[i])
+		for _, boundary := range wordBoundaries {
+			if char == boundary {
+				// Found a boundary, position cursor at it
+				return i
+			}
+		}
+	}
+	
+	// No boundary found, go to end
+	return len(input)
 }
 
 func (m *model) exitFilter() {
@@ -618,6 +886,9 @@ func (m *model) exitFilter() {
 	
 	m.filterMode = false
 	m.filterInput = ""
+	m.showSuggestions = false
+	m.selectedSuggestion = 0
+	m.filterCursorPos = 0
 	
 	// Restore original data if needed
 	if m.filterType == CollectionsFilter && len(m.originalCollections) > 0 {
@@ -825,9 +1096,128 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Handle filter mode first (highest priority after input dialog)
 		if m.filterMode {
+			// Handle jq filter auto-completion navigation
+			if m.filterType == JQFilter && m.showSuggestions {
+				switch msg.String() {
+				case "esc":
+					m.exitFilter()
+					return m, nil
+				case "left":
+					if m.filterCursorPos > 0 {
+						m.filterCursorPos--
+					}
+					return m, nil
+				case "right":
+					if m.filterCursorPos < len(m.filterInput) {
+						m.filterCursorPos++
+					}
+					return m, nil
+				case "ctrl+left":
+					m.filterCursorPos = m.findPreviousWordBoundary(m.filterInput, m.filterCursorPos)
+					return m, nil
+				case "ctrl+right":
+					m.filterCursorPos = m.findNextWordBoundary(m.filterInput, m.filterCursorPos)
+					return m, nil
+				case "home":
+					m.filterCursorPos = 0
+					return m, nil
+				case "end":
+					m.filterCursorPos = len(m.filterInput)
+					return m, nil
+				case "up":
+					filteredSuggestions := m.getFilteredSuggestions()
+					if len(filteredSuggestions) > 0 {
+						m.selectedSuggestion--
+						if m.selectedSuggestion < 0 {
+							m.selectedSuggestion = len(filteredSuggestions) - 1
+						}
+					}
+					return m, nil
+				case "down":
+					filteredSuggestions := m.getFilteredSuggestions()
+					if len(filteredSuggestions) > 0 {
+						m.selectedSuggestion++
+						if m.selectedSuggestion >= len(filteredSuggestions) {
+							m.selectedSuggestion = 0
+						}
+					}
+					return m, nil
+				case "tab", "enter":
+					// Accept selected suggestion
+					filteredSuggestions := m.getFilteredSuggestions()
+					if len(filteredSuggestions) > 0 && m.selectedSuggestion < len(filteredSuggestions) {
+						if msg.String() == "tab" {
+							// Tab just fills the suggestion
+							m.filterInput = filteredSuggestions[m.selectedSuggestion]
+							m.filterCursorPos = len(m.filterInput) // Set cursor to end
+							m.selectedSuggestion = 0 // Reset selection
+							return m, nil
+						} else {
+							// Enter applies the suggestion
+							m.filterInput = filteredSuggestions[m.selectedSuggestion]
+							cmd := m.applyFilter()
+							m.exitFilter()
+							return m, cmd
+						}
+					} else if msg.String() == "enter" {
+						// No suggestion selected, just apply current input
+						cmd := m.applyFilter()
+						m.exitFilter()
+						return m, cmd
+					}
+					return m, nil
+				case "backspace":
+					if m.filterCursorPos > 0 {
+						// Remove character before cursor
+						m.filterInput = m.filterInput[:m.filterCursorPos-1] + m.filterInput[m.filterCursorPos:]
+						m.filterCursorPos--
+						m.selectedSuggestion = 0
+					}
+					return m, nil
+				case "delete":
+					if m.filterCursorPos < len(m.filterInput) {
+						// Remove character at cursor
+						m.filterInput = m.filterInput[:m.filterCursorPos] + m.filterInput[m.filterCursorPos+1:]
+						m.selectedSuggestion = 0
+					}
+					return m, nil
+				default:
+					// Add character to filter input at cursor position
+					if len(msg.String()) == 1 && msg.String() >= " " && msg.String() <= "~" {
+						m.filterInput = m.filterInput[:m.filterCursorPos] + msg.String() + m.filterInput[m.filterCursorPos:]
+						m.filterCursorPos++
+						m.selectedSuggestion = 0
+					}
+					return m, nil
+				}
+			}
+			
+			// Regular filter handling for collections or jq without suggestions
 			switch msg.String() {
 			case "esc":
 				m.exitFilter()
+				return m, nil
+			case "left":
+				if m.filterCursorPos > 0 {
+					m.filterCursorPos--
+				}
+				return m, nil
+			case "right":
+				if m.filterCursorPos < len(m.filterInput) {
+					m.filterCursorPos++
+				}
+				return m, nil
+			case "ctrl+left":
+				m.filterCursorPos = m.findPreviousWordBoundary(m.filterInput, m.filterCursorPos)
+				return m, nil
+			case "ctrl+right":
+				m.filterCursorPos = m.findNextWordBoundary(m.filterInput, m.filterCursorPos)
+				return m, nil
+			case "home":
+				m.filterCursorPos = 0
+				return m, nil
+			case "end":
+				m.filterCursorPos = len(m.filterInput)
 				return m, nil
 			case "enter":
 				// For jq filter, apply the filter and exit
@@ -848,8 +1238,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "backspace":
-				if len(m.filterInput) > 0 {
-					m.filterInput = m.filterInput[:len(m.filterInput)-1]
+				if m.filterCursorPos > 0 {
+					// Remove character before cursor
+					m.filterInput = m.filterInput[:m.filterCursorPos-1] + m.filterInput[m.filterCursorPos:]
+					m.filterCursorPos--
+					// Apply collections filter in real-time
+					if m.filterType == CollectionsFilter {
+						m.applyCollectionsFilterResult()
+						m.updateCollectionsViewport()
+					}
+				}
+				return m, nil
+			case "delete":
+				if m.filterCursorPos < len(m.filterInput) {
+					// Remove character at cursor
+					m.filterInput = m.filterInput[:m.filterCursorPos] + m.filterInput[m.filterCursorPos+1:]
 					// Apply collections filter in real-time
 					if m.filterType == CollectionsFilter {
 						m.applyCollectionsFilterResult()
@@ -858,9 +1261,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			default:
-				// Add character to filter input
+				// Add character to filter input at cursor position
 				if len(msg.String()) == 1 && msg.String() >= " " && msg.String() <= "~" {
-					m.filterInput += msg.String()
+					m.filterInput = m.filterInput[:m.filterCursorPos] + msg.String() + m.filterInput[m.filterCursorPos:]
+					m.filterCursorPos++
 					// Apply collections filter in real-time
 					if m.filterType == CollectionsFilter {
 						m.applyCollectionsFilterResult()
@@ -1479,7 +1883,46 @@ func (m model) View() string {
 		case CollectionsFilter:
 			filterName = "search"
 		}
-		footerText = fmt.Sprintf("%s filter: %s_ • Enter: Apply • Esc: Cancel", filterName, m.filterInput)
+		
+		// Show suggestions for jq filter
+		if m.filterType == JQFilter && m.showSuggestions {
+			filteredSuggestions := m.getFilteredSuggestions()
+			if len(filteredSuggestions) > 0 {
+				suggestionText := ""
+				// Show up to 3 suggestions in footer
+				maxShow := 3
+				if len(filteredSuggestions) < maxShow {
+					maxShow = len(filteredSuggestions)
+				}
+				
+				for i := 0; i < maxShow; i++ {
+					if i == m.selectedSuggestion {
+						suggestionText += "[" + filteredSuggestions[i] + "]"
+					} else {
+						suggestionText += filteredSuggestions[i]
+					}
+					if i < maxShow-1 {
+						suggestionText += " "
+					}
+				}
+				
+				if len(filteredSuggestions) > maxShow {
+					suggestionText += fmt.Sprintf(" (+%d more)", len(filteredSuggestions)-maxShow)
+				}
+				
+				// Show input with cursor
+				inputWithCursor := m.filterInput[:m.filterCursorPos] + "|" + m.filterInput[m.filterCursorPos:]
+				footerText = fmt.Sprintf("%s filter: %s • ↑↓: Navigate • Tab: Complete • Enter: Apply • Esc: Cancel | %s", filterName, inputWithCursor, suggestionText)
+			} else {
+				// Show input with cursor
+				inputWithCursor := m.filterInput[:m.filterCursorPos] + "|" + m.filterInput[m.filterCursorPos:]
+				footerText = fmt.Sprintf("%s filter: %s • Enter: Apply • Esc: Cancel", filterName, inputWithCursor)
+			}
+		} else {
+			// Show input with cursor
+			inputWithCursor := m.filterInput[:m.filterCursorPos] + "|" + m.filterInput[m.filterCursorPos:]
+			footerText = fmt.Sprintf("%s filter: %s • Enter: Apply • Esc: Cancel", filterName, inputWithCursor)
+		}
 	} else if m.isLoading {
 		footerText = "Loading... • Tab: Switch panels • p: Command Palette • q: Quit"
 	} else if m.activePanel == responsePanel {
