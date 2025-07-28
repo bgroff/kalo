@@ -11,11 +11,10 @@ import (
 type RequestSection int
 
 const (
-	URLSection RequestSection = iota
-	HeadersSection
-	QuerySection
-	AuthSection
+	QuerySection RequestSection = iota
 	BodySection
+	HeadersSection
+	AuthSection
 )
 
 type BruRequest struct {
@@ -52,7 +51,49 @@ type BruAuth struct {
 	Values map[string]string `json:"values,omitempty"`
 }
 
-func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, requestCursor RequestSection, focusedStyle, blurredStyle, titleStyle, cursorStyle, methodStyle, urlStyle, sectionStyle lipgloss.Style) string {
+func GetRequestTabNames() []string {
+	return []string{"Query Parameters", "Request Body", "Headers", "Authorization"}
+}
+
+func GetRequestTabSection(tabIndex int) RequestSection {
+	switch tabIndex {
+	case 0:
+		return QuerySection
+	case 1:
+		return BodySection
+	case 2:
+		return HeadersSection
+	case 3:
+		return AuthSection
+	default:
+		return QuerySection
+	}
+}
+
+func renderTabs(tabs []string, activeTab int, width int, focusedStyle, blurredStyle lipgloss.Style, activePanel bool) string {
+	var renderedTabs []string
+	
+	for i, tab := range tabs {
+		var tabStyle lipgloss.Style
+		if i == activeTab && activePanel {
+			tabStyle = focusedStyle.Copy().Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderBottom(false)
+		} else if i == activeTab {
+			tabStyle = blurredStyle.Copy().Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderBottom(false)
+		} else {
+			tabStyle = lipgloss.NewStyle().Padding(0, 1).Faint(true)
+		}
+		renderedTabs = append(renderedTabs, tabStyle.Render(tab))
+	}
+	
+	tabsContent := lipgloss.JoinHorizontal(lipgloss.Bottom, renderedTabs...)
+	
+	// Ensure the tabs fit within the available width
+	return lipgloss.NewStyle().
+		Width(width).
+		Render(tabsContent)
+}
+
+func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, requestCursor RequestSection, activeTab int, focusedStyle, blurredStyle, titleStyle, cursorStyle, methodStyle, urlStyle, sectionStyle lipgloss.Style) string {
 	var style lipgloss.Style
 	if activePanel {
 		style = focusedStyle
@@ -75,98 +116,42 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 			Render(content)
 	}
 
-	var sections []string
-
-	urlCursor := ""
-	if activePanel && requestCursor == URLSection {
-		urlCursor = cursorStyle.Render("► ")
-	}
-	methodAndUrl := lipgloss.JoinHorizontal(
+	// Create title with method and URL
+	titleContent := lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		urlCursor,
+		" Request ",
+		"│ ",
 		methodStyle.Render(currentReq.HTTP.Method),
 		" ",
 		urlStyle.Render(currentReq.HTTP.URL),
+		" ",
 	)
-	sections = append(sections, methodAndUrl)
-
-	if len(currentReq.Headers) > 0 {
-		headersCursor := ""
-		if activePanel && requestCursor == HeadersSection {
-			headersCursor = cursorStyle.Render("► ")
-		}
-		headers := headersCursor + sectionStyle.Render("Headers:")
-		sections = append(sections, headers)
-		
-		var headersContent strings.Builder
-		// Sort headers alphabetically
-		var keys []string
-		for key := range currentReq.Headers {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		
-		for _, key := range keys {
-			headersContent.WriteString(fmt.Sprintf("  %s: %s\n", key, currentReq.Headers[key]))
-		}
-		sections = append(sections, strings.TrimSpace(headersContent.String()))
-	}
-
-	if len(currentReq.Query) > 0 {
-		queryCursor := ""
-		if activePanel && requestCursor == QuerySection {
-			queryCursor = cursorStyle.Render("► ")
-		}
-		queryHeader := queryCursor + sectionStyle.Render("Query Parameters:")
-		sections = append(sections, queryHeader)
-		
-		var queryContent strings.Builder
-		// Sort query parameters alphabetically
-		var keys []string
-		for key := range currentReq.Query {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		
-		for _, key := range keys {
-			queryContent.WriteString(fmt.Sprintf("  %s: %s\n", key, currentReq.Query[key]))
-		}
-		sections = append(sections, strings.TrimSpace(queryContent.String()))
-	}
-
-	if currentReq.Auth.Type != "" {
-		authCursor := ""
-		if activePanel && requestCursor == AuthSection {
-			authCursor = cursorStyle.Render("► ")
-		}
-		authHeader := authCursor + sectionStyle.Render(fmt.Sprintf("Auth (%s):", currentReq.Auth.Type))
-		sections = append(sections, authHeader)
-		
-		var authContent strings.Builder
-		for key, value := range currentReq.Auth.Values {
-			authContent.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
-		}
-		sections = append(sections, strings.TrimSpace(authContent.String()))
-	}
-
-	if currentReq.Body.Type != "" && currentReq.Body.Data != "" {
-		bodyCursor := ""
-		if activePanel && requestCursor == BodySection {
-			bodyCursor = cursorStyle.Render("► ")
-		}
-		bodyHeader := bodyCursor + sectionStyle.Render(fmt.Sprintf("Body (%s):", currentReq.Body.Type))
-		sections = append(sections, bodyHeader)
-		sections = append(sections, "  "+currentReq.Body.Data)
-	}
-
-	title := titleStyle.Render(" Request ")
+	title := titleStyle.Render(titleContent)
 	titleBar := lipgloss.NewStyle().
 		Width(width-2).
 		Align(lipgloss.Left).
 		Render(title)
+
+	// Render tabs (account for panel padding and border)
+	tabs := GetRequestTabNames()
+	tabsRender := renderTabs(tabs, activeTab, width-4, focusedStyle, blurredStyle, activePanel)
+
+	// Render content for active tab only
+	var tabContent string
+	currentSection := GetRequestTabSection(activeTab)
 	
-	sectionsContent := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, sectionsContent)
+	switch currentSection {
+	case QuerySection:
+		tabContent = renderQueryContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle)
+	case BodySection:
+		tabContent = renderBodyContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle)
+	case HeadersSection:
+		tabContent = renderHeadersContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle)
+	case AuthSection:
+		tabContent = renderAuthContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle)
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, tabsRender, tabContent)
 
 	return style.
 		Width(width).
@@ -175,12 +160,102 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		Render(content)
 }
 
-func GetMaxRequestSection(currentReq *BruRequest) RequestSection {
-	if currentReq == nil {
-		return URLSection
+func renderQueryContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle lipgloss.Style) string {
+	if len(currentReq.Query) == 0 {
+		return "  No query parameters"
 	}
 
-	maxSection := URLSection
+	// Sort query parameters alphabetically
+	var keys []string
+	maxKeyLength := 0
+	for key := range currentReq.Query {
+		keys = append(keys, key)
+		if len(key) > maxKeyLength {
+			maxKeyLength = len(key)
+		}
+	}
+	sort.Strings(keys)
+	
+	var lines []string
+	for _, key := range keys {
+		// Align the colons by padding the key to the maximum key length
+		paddedKey := fmt.Sprintf("%-*s", maxKeyLength, key)
+		lines = append(lines, fmt.Sprintf("  %s: %s", paddedKey, currentReq.Query[key]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderBodyContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle lipgloss.Style) string {
+	if currentReq.Body.Type == "" || currentReq.Body.Data == "" {
+		return "  No request body"
+	}
+
+	return fmt.Sprintf("  Type: %s\n\n%s", currentReq.Body.Type, currentReq.Body.Data)
+}
+
+func renderHeadersContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle lipgloss.Style) string {
+	if len(currentReq.Headers) == 0 {
+		return "  No headers"
+	}
+
+	// Sort headers alphabetically
+	var keys []string
+	maxKeyLength := 0
+	for key := range currentReq.Headers {
+		keys = append(keys, key)
+		if len(key) > maxKeyLength {
+			maxKeyLength = len(key)
+		}
+	}
+	sort.Strings(keys)
+	
+	var lines []string
+	for _, key := range keys {
+		// Align the colons by padding the key to the maximum key length
+		paddedKey := fmt.Sprintf("%-*s", maxKeyLength, key)
+		lines = append(lines, fmt.Sprintf("  %s: %s", paddedKey, currentReq.Headers[key]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderAuthContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle lipgloss.Style) string {
+	if currentReq.Auth.Type == "" {
+		return "  No authorization"
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("  Type: %s", currentReq.Auth.Type))
+	
+	if len(currentReq.Auth.Values) > 0 {
+		lines = append(lines, "") // Empty line separator
+		
+		// Find the maximum key length for alignment
+		maxKeyLength := 0
+		var keys []string
+		for key := range currentReq.Auth.Values {
+			keys = append(keys, key)
+			if len(key) > maxKeyLength {
+				maxKeyLength = len(key)
+			}
+		}
+		sort.Strings(keys)
+		
+		for _, key := range keys {
+			// Align the colons by padding the key to the maximum key length
+			paddedKey := fmt.Sprintf("%-*s", maxKeyLength, key)
+			lines = append(lines, fmt.Sprintf("  %s: %s", paddedKey, currentReq.Auth.Values[key]))
+		}
+	}
+	
+	return strings.Join(lines, "\n")
+}
+
+func GetMaxRequestSection(currentReq *BruRequest) RequestSection {
+	if currentReq == nil {
+		return QuerySection
+	}
+
+	maxSection := QuerySection
 
 	if len(currentReq.Headers) > 0 {
 		maxSection = HeadersSection
