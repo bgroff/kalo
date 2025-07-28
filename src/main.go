@@ -60,6 +60,7 @@ type model struct {
 	bruRequests      []*panels.BruRequest
 	currentReq       *panels.BruRequest
 	requestCursor    panels.RequestSection
+	requestActiveTab int
 	response         string
 	statusCode       int
 	httpClient       *HTTPClient
@@ -69,6 +70,7 @@ type model struct {
 	responseViewport viewport.Model
 	headersViewport  viewport.Model
 	responseCursor   panels.ResponseSection
+	responseActiveTab int
 	originalResponse string // Store original response for jq filtering
 	commandPalette   *CommandPalette
 	inputDialog      *InputDialog
@@ -148,8 +150,8 @@ func initialModel() model {
 	m := model{
 		activePanel:         collectionsPanel,
 		selectedReq:         0,
-		requestCursor:       panels.URLSection,
-		responseCursor:      panels.ResponseHeadersSection,
+		requestCursor:       panels.QuerySection,
+		responseCursor:      panels.ResponseBodySection,
 		statusCode:          200,
 		httpClient:          NewHTTPClient(),
 		collectionsViewport: collectionsVP,
@@ -519,7 +521,7 @@ func (m *model) updateCurrentRequest() {
 	// Use the stored RequestIndex instead of calculating it
 	if item.RequestIndex >= 0 && item.RequestIndex < len(m.bruRequests) {
 		m.currentReq = m.bruRequests[item.RequestIndex]
-		m.requestCursor = panels.URLSection
+		m.requestCursor = panels.QuerySection
 	}
 }
 
@@ -905,8 +907,8 @@ func (m model) renderMainArea(width, height int) string {
 		responseHeight = 5
 	}
 
-	request := panels.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, focusedStyle, blurredStyle, titleStyle, cursorStyle, methodStyle, urlStyle, sectionStyle)
-	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, &m.headersViewport, &m.responseViewport, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle, m.appliedJQFilter())
+	request := panels.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, m.requestActiveTab, focusedStyle, blurredStyle, titleStyle, cursorStyle, methodStyle, urlStyle, sectionStyle)
+	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, m.responseActiveTab, &m.headersViewport, &m.responseViewport, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle, m.appliedJQFilter())
 
 	return lipgloss.JoinVertical(lipgloss.Left, request, response)
 }

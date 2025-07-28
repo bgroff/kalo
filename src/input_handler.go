@@ -390,12 +390,38 @@ func (h *InputHandler) handleNormalInput(m *model, msg tea.KeyMsg) (tea.Model, t
 			}
 		}
 	case "left":
-		if m.activePanel == responsePanel && m.responseCursor == panels.ResponseBodySection {
-			m.responseCursor = panels.ResponseHeadersSection
+		if m.activePanel == responsePanel {
+			// Navigate response tabs left
+			if m.responseActiveTab > 0 {
+				m.responseActiveTab--
+			} else {
+				m.responseActiveTab = len(panels.GetResponseTabNames()) - 1 // Wrap to last tab
+			}
+		} else if m.activePanel == requestPanel {
+			// Navigate request tabs left
+			if m.requestActiveTab > 0 {
+				m.requestActiveTab--
+			} else {
+				m.requestActiveTab = len(panels.GetRequestTabNames()) - 1 // Wrap to last tab
+			}
 		}
 	case "right":
-		if m.activePanel == responsePanel && m.responseCursor == panels.ResponseHeadersSection {
-			m.responseCursor = panels.ResponseBodySection
+		if m.activePanel == responsePanel {
+			// Navigate response tabs right
+			maxTabs := len(panels.GetResponseTabNames())
+			if m.responseActiveTab < maxTabs-1 {
+				m.responseActiveTab++
+			} else {
+				m.responseActiveTab = 0 // Wrap to first tab
+			}
+		} else if m.activePanel == requestPanel {
+			// Navigate request tabs right
+			maxTabs := len(panels.GetRequestTabNames())
+			if m.requestActiveTab < maxTabs-1 {
+				m.requestActiveTab++
+			} else {
+				m.requestActiveTab = 0 // Wrap to first tab
+			}
 		}
 	case "s":
 		if !m.isLoading {

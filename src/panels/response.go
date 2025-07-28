@@ -12,8 +12,8 @@ import (
 type ResponseSection int
 
 const (
-	ResponseHeadersSection ResponseSection = iota
-	ResponseBodySection
+	ResponseBodySection ResponseSection = iota
+	ResponseHeadersSection
 )
 
 type HTTPResponse struct {
@@ -33,7 +33,45 @@ func max(a, b int) int {
 	return b
 }
 
-func RenderResponse(width, height int, activePanel bool, isLoading bool, lastResponse *HTTPResponse, statusCode int, responseCursor ResponseSection, headersViewport, responseViewport *viewport.Model, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle lipgloss.Style, appliedJQFilter string) string {
+func GetResponseTabNames() []string {
+	return []string{"Response Body", "Response Headers"}
+}
+
+func GetResponseTabSection(tabIndex int) ResponseSection {
+	switch tabIndex {
+	case 0:
+		return ResponseBodySection
+	case 1:
+		return ResponseHeadersSection
+	default:
+		return ResponseBodySection
+	}
+}
+
+func renderResponseTabs(tabs []string, activeTab int, width int, focusedStyle, blurredStyle lipgloss.Style, activePanel bool) string {
+	var renderedTabs []string
+	
+	for i, tab := range tabs {
+		var tabStyle lipgloss.Style
+		if i == activeTab && activePanel {
+			tabStyle = focusedStyle.Copy().Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderBottom(false)
+		} else if i == activeTab {
+			tabStyle = blurredStyle.Copy().Padding(0, 1).Border(lipgloss.RoundedBorder()).BorderBottom(false)
+		} else {
+			tabStyle = lipgloss.NewStyle().Padding(0, 1).Faint(true)
+		}
+		renderedTabs = append(renderedTabs, tabStyle.Render(tab))
+	}
+	
+	tabsContent := lipgloss.JoinHorizontal(lipgloss.Bottom, renderedTabs...)
+	
+	// Ensure the tabs fit within the available width
+	return lipgloss.NewStyle().
+		Width(width).
+		Render(tabsContent)
+}
+
+func RenderResponse(width, height int, activePanel bool, isLoading bool, lastResponse *HTTPResponse, statusCode int, responseCursor ResponseSection, activeTab int, headersViewport, responseViewport *viewport.Model, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle lipgloss.Style, appliedJQFilter string) string {
 	var style lipgloss.Style
 	if activePanel {
 		style = focusedStyle
@@ -41,66 +79,19 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 		style = blurredStyle
 	}
 	
-	// Calculate available space for both viewports
-	availableHeight := height - 6 // Account for padding, borders, status line
-	headersHeight := availableHeight / 3  // 1/3 for headers
-	bodyHeight := availableHeight - headersHeight // 2/3 for body
+	// Calculate available space for the active tab viewport
+	availableHeight := height - 9 // Account for padding, borders, title, tabs
 	
-	if headersHeight < 3 {
-		headersHeight = 3
-	}
-	if bodyHeight < 3 {
-		bodyHeight = 3
+	if availableHeight < 5 {
+		availableHeight = 5
 	}
 	
 	// Update viewport sizes
 	contentWidth := width - 8  // Account for padding and borders
 	headersViewport.Width = contentWidth
-	headersViewport.Height = headersHeight
+	headersViewport.Height = availableHeight
 	responseViewport.Width = contentWidth
-	responseViewport.Height = bodyHeight
-
-	// Headers section with cursor and scroll indicator
-	headersCursor := ""
-	if activePanel && responseCursor == ResponseHeadersSection {
-		headersCursor = cursorStyle.Render("► ")
-	}
-	
-	headersScrollInfo := ""
-	if headersViewport.TotalLineCount() > 0 {
-		scrollPercent := int((float64(headersViewport.YOffset) / float64(max(1, headersViewport.TotalLineCount()-headersViewport.Height))) * 100)
-		if scrollPercent > 100 {
-			scrollPercent = 100
-		}
-		headersScrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
-	}
-	
-	headersTitle := headersCursor + sectionStyle.Render("Response Headers:") + headersScrollInfo
-
-	// Body section with cursor and scroll indicator
-	bodyCursor := ""
-	if activePanel && responseCursor == ResponseBodySection {
-		bodyCursor = cursorStyle.Render("► ")
-	}
-	
-	bodyScrollInfo := ""
-	if responseViewport.TotalLineCount() > 0 {
-		scrollPercent := int((float64(responseViewport.YOffset) / float64(max(1, responseViewport.TotalLineCount()-responseViewport.Height))) * 100)
-		if scrollPercent > 100 {
-			scrollPercent = 100
-		}
-		bodyScrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
-		
-		// Add jq filter info if one is applied
-		if appliedJQFilter != "" {
-			bodyScrollInfo += fmt.Sprintf(" (jq: %s)", appliedJQFilter)
-		}
-	} else if appliedJQFilter != "" {
-		// Show jq filter even if no scroll info
-		bodyScrollInfo = fmt.Sprintf(" (jq: %s)", appliedJQFilter)
-	}
-	
-	bodyTitle := bodyCursor + sectionStyle.Render("Response Body:") + bodyScrollInfo
+	responseViewport.Height = availableHeight
 
 	// Create title with status, timing, and MIME type
 	var titleContent string
@@ -160,19 +151,50 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 		Align(lipgloss.Left).
 		Render(title)
 
-	responseContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		headersTitle,
-		headersViewport.View(),
-		bodyTitle,
-		responseViewport.View(),
-	)
+	// Render tabs (account for panel padding and border)
+	tabs := GetResponseTabNames()
+	tabsRender := renderResponseTabs(tabs, activeTab, width-4, focusedStyle, blurredStyle, activePanel)
+
+	// Render content for active tab only
+	var tabContent string
+	currentSection := GetResponseTabSection(activeTab)
 	
-	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, responseContent)
+	if currentSection == ResponseBodySection {
+		tabContent = renderResponseBodyContent(responseViewport, activePanel, responseCursor, currentSection, cursorStyle, sectionStyle, appliedJQFilter)
+	} else {
+		tabContent = renderResponseHeadersContent(headersViewport, activePanel, responseCursor, currentSection, cursorStyle, sectionStyle)
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, tabsRender, tabContent)
 
 	return style.
 		Width(width).
 		Height(height).
 		Padding(0, 1).
 		Render(content)
+}
+
+func renderResponseBodyContent(responseViewport *viewport.Model, activePanel bool, responseCursor ResponseSection, currentSection ResponseSection, cursorStyle, sectionStyle lipgloss.Style, appliedJQFilter string) string {
+	bodyScrollInfo := ""
+	if responseViewport.TotalLineCount() > 0 {
+		scrollPercent := int((float64(responseViewport.YOffset) / float64(max(1, responseViewport.TotalLineCount()-responseViewport.Height))) * 100)
+		if scrollPercent > 100 {
+			scrollPercent = 100
+		}
+		bodyScrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
+		
+		// Add jq filter info if one is applied
+		if appliedJQFilter != "" {
+			bodyScrollInfo += fmt.Sprintf(" (jq: %s)", appliedJQFilter)
+		}
+	} else if appliedJQFilter != "" {
+		// Show jq filter even if no scroll info
+		bodyScrollInfo = fmt.Sprintf(" (jq: %s)", appliedJQFilter)
+	}
+	
+	return responseViewport.View()
+}
+
+func renderResponseHeadersContent(headersViewport *viewport.Model, activePanel bool, responseCursor ResponseSection, currentSection ResponseSection, cursorStyle, sectionStyle lipgloss.Style) string {
+	return headersViewport.View()
 }
