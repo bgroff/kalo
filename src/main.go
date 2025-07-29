@@ -78,44 +78,30 @@ type model struct {
 	inputHandler     *InputHandler
 }
 
+// renderFilterCursor renders a solid colored cursor for filter input
+func renderFilterCursor(input string, cursorPos int) string {
+	if cursorPos < 0 || cursorPos > len(input) {
+		return input
+	}
+	
+	if cursorPos == len(input) {
+		// Cursor at end - add a space with cursor background
+		return input + currentTheme.TextCursorStyle.Render(" ")
+	} else {
+		// Cursor in middle - style the character at cursor position
+		before := input[:cursorPos]
+		cursorChar := string(input[cursorPos])
+		if cursorChar == "" {
+			cursorChar = " "
+		}
+		after := input[cursorPos+1:]
+		return before + currentTheme.TextCursorStyle.Render(cursorChar) + after
+	}
+}
+
 var (
-	focusedStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62"))
-
-	blurredStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240"))
-
-	titleStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("230")).
-			Padding(0, 1)
-
-	methodStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("46")).
-			Foreground(lipgloss.Color("0")).
-			Padding(0, 1).
-			Bold(true)
-
-	urlStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86"))
-
-	statusOkStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("46")).
-			Foreground(lipgloss.Color("0")).
-			Padding(0, 1)
-
-	headerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			MarginTop(1)
-
-	cursorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true)
-
-	sectionStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86"))
+	// Global theme instance
+	currentTheme *Theme
 )
 
 func getCollectionsDir() (string, error) {
@@ -261,7 +247,8 @@ func (m *model) updateCollectionsViewport() {
 		}
 		
 		if i == m.selectedReq {
-			items = append(items, "> "+displayName)
+			// Use solid colored bar spanning the whole row for selected item
+			items = append(items, currentTheme.TextCursorStyle.Render("  "+displayName))
 		} else {
 			items = append(items, "  "+displayName)
 		}
@@ -622,6 +609,7 @@ func (m *model) executeCommand(action string) tea.Cmd {
 					"method": m.currentReq.HTTP.Method,
 					"name":   m.currentReq.Meta.Name,
 					"url":    m.currentReq.HTTP.URL,
+					"tags":   m.currentReq.Tags,
 				},
 				ActionData: map[string]interface{}{
 					"filePath": getCurrentRequestFilePath(m),
@@ -634,6 +622,14 @@ func (m *model) executeCommand(action string) tea.Cmd {
 		spec := InputSpec{
 			Type:   OpenAPIImportInput,
 			Title:  "Import OpenAPI Specification",
+			Action: action,
+		}
+		m.inputDialog.Show(spec)
+		return nil
+	case "switch_theme":
+		spec := InputSpec{
+			Type:   ThemeSelectionInput,
+			Title:  "Switch Theme",
 			Action: action,
 		}
 		m.inputDialog.Show(spec)
@@ -687,6 +683,7 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 			method, methodOk := actionData["method"].(string)
 			urlStr, urlOk := actionData["url"].(string)
 			name, _ := actionData["name"].(string)
+			tags, _ := actionData["tags"].([]string)
 			
 			if methodOk && urlOk && urlStr != "" {
 				// Get the current collection path (folder or root)
@@ -702,17 +699,22 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 					filename := generateRequestFilename(method, urlStr)
 					filePath := filepath.Join(targetDir, filename)
 					
-					// Create the .bru file content
-					bruContent := fmt.Sprintf(`meta {
-  name: %s
-  type: http
-  seq: 1
-}
-
-%s {
-  url: %s
-}
-`, displayName, strings.ToLower(method), urlStr)
+					// Create a new BruRequest object
+					newReq := &panels.BruRequest{
+						Meta: panels.BruMeta{
+							Name: displayName,
+							Type: "http",
+							Seq:  1,
+						},
+						HTTP: panels.BruHTTP{
+							Method: method,
+							URL:    urlStr,
+						},
+						Tags: tags,
+					}
+					
+					// Generate complete .bru file content
+					bruContent := m.generateBruContent(newReq)
 					
 					err := os.WriteFile(filePath, []byte(bruContent), 0644)
 					if err == nil {
@@ -727,6 +729,7 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 			method, methodOk := actionData["method"].(string)
 			urlStr, urlOk := actionData["url"].(string)
 			name, _ := actionData["name"].(string)
+			tags, _ := actionData["tags"].([]string)
 			filePath, filePathOk := actionData["filePath"].(string)
 			
 			if methodOk && urlOk && filePathOk && urlStr != "" && filePath != "" {
@@ -736,21 +739,22 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 					displayName = fmt.Sprintf("%s %s", method, urlStr)
 				}
 				
-				// Create the updated .bru file content
-				bruContent := fmt.Sprintf(`meta {
-  name: %s
-  type: http
-  seq: 1
-}
-
-%s {
-  url: %s
-}
-`, displayName, strings.ToLower(method), urlStr)
-				
-				err := os.WriteFile(filePath, []byte(bruContent), 0644)
-				if err == nil {
-					m.loadBruFiles() // Refresh the collections list
+				// Update the current request with new values
+				if m.currentReq != nil {
+					m.currentReq.Meta.Name = displayName
+					m.currentReq.HTTP.Method = method
+					m.currentReq.HTTP.URL = urlStr
+					if tags != nil {
+						m.currentReq.Tags = tags
+					}
+					
+					// Generate complete .bru file content preserving all existing data
+					bruContent := m.generateBruContent(m.currentReq)
+					
+					err := os.WriteFile(filePath, []byte(bruContent), 0644)
+					if err == nil {
+						m.loadBruFiles() // Refresh the collections list
+					}
 				}
 			}
 		}
@@ -777,6 +781,16 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 			}
 		}
 		return nil
+	case "switch_theme":
+		if actionData != nil {
+			themeName, themeOk := actionData["theme"].(string)
+			if themeOk && themeName != "" {
+				// Switch to the selected theme
+				currentTheme = ReloadTheme(themeName)
+				// Note: The UI will automatically update on next render
+			}
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -793,7 +807,7 @@ func (m model) View() string {
 	// Account for header (1 line) + footer (1 line) + some padding
 	availableHeight := m.height - 4
 
-	sidebar := panels.RenderCollections(sidebarWidth, availableHeight, m.activePanel == collectionsPanel, &m.collectionsViewport, focusedStyle, blurredStyle, titleStyle)
+	sidebar := panels.RenderCollections(sidebarWidth, availableHeight, m.activePanel == collectionsPanel, &m.collectionsViewport, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle)
 	main := m.renderMainArea(mainWidth, availableHeight)
 
 	content := lipgloss.JoinHorizontal(
@@ -802,7 +816,7 @@ func (m model) View() string {
 		main,
 	)
 
-	header := titleStyle.Width(m.width - 2).Render("Kalo - Bruno API Client")
+	header := currentTheme.TitleStyle.Width(m.width - 2).Render("Kalo - Bruno API Client")
 
 	var footerText string
 	if m.filterMode() {
@@ -841,16 +855,16 @@ func (m model) View() string {
 				}
 				
 				// Show input with cursor
-				inputWithCursor := m.filterInput()[:m.filterCursorPos()] + "|" + m.filterInput()[m.filterCursorPos():]
+				inputWithCursor := renderFilterCursor(m.filterInput(), m.filterCursorPos())
 				footerText = fmt.Sprintf("%s filter: %s • ↑↓: Navigate • Tab: Complete • Enter: Apply • Esc: Cancel | %s", filterName, inputWithCursor, suggestionText)
 			} else {
 				// Show input with cursor
-				inputWithCursor := m.filterInput()[:m.filterCursorPos()] + "|" + m.filterInput()[m.filterCursorPos():]
+				inputWithCursor := renderFilterCursor(m.filterInput(), m.filterCursorPos())
 				footerText = fmt.Sprintf("%s filter: %s • Enter: Apply • Esc: Cancel", filterName, inputWithCursor)
 			}
 		} else {
 			// Show input with cursor
-			inputWithCursor := m.filterInput()[:m.filterCursorPos()] + "|" + m.filterInput()[m.filterCursorPos():]
+			inputWithCursor := renderFilterCursor(m.filterInput(), m.filterCursorPos())
 			footerText = fmt.Sprintf("%s filter: %s • Enter: Apply • Esc: Cancel", filterName, inputWithCursor)
 		}
 	} else if m.isLoading {
@@ -870,7 +884,7 @@ func (m model) View() string {
 	} else {
 		footerText = "Tab: Switch panels • ↑↓: Navigate • Enter/Space/s: Execute • p: Command Palette • q: Quit"
 	}
-	footer := headerStyle.Width(m.width - 2).Render(footerText)
+	footer := currentTheme.HeaderStyle.Width(m.width - 2).Render(footerText)
 
 	baseView := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -907,13 +921,129 @@ func (m model) renderMainArea(width, height int) string {
 		responseHeight = 5
 	}
 
-	request := panels.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, m.requestActiveTab, focusedStyle, blurredStyle, titleStyle, cursorStyle, methodStyle, urlStyle, sectionStyle)
-	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, m.responseActiveTab, &m.headersViewport, &m.responseViewport, focusedStyle, blurredStyle, titleStyle, cursorStyle, sectionStyle, statusOkStyle, m.appliedJQFilter())
+	request := panels.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, m.requestActiveTab, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle, currentTheme.CursorStyle, currentTheme.MethodStyle, currentTheme.URLStyle, currentTheme.SectionStyle, currentTheme.TextCursorStyle)
+	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, m.responseActiveTab, &m.headersViewport, &m.responseViewport, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle, currentTheme.CursorStyle, currentTheme.SectionStyle, currentTheme.StatusOkStyle, m.appliedJQFilter())
 
 	return lipgloss.JoinVertical(lipgloss.Left, request, response)
 }
 
+// generateBruContent creates a complete .bru file content from a BruRequest,
+// preserving all existing data including tags, headers, query params, body, auth, etc.
+func (m *model) generateBruContent(request *panels.BruRequest) string {
+	var content strings.Builder
+	
+	// Meta block
+	content.WriteString("meta {\n")
+	content.WriteString(fmt.Sprintf("  name: %s\n", request.Meta.Name))
+	content.WriteString("  type: http\n")
+	content.WriteString(fmt.Sprintf("  seq: %d\n", request.Meta.Seq))
+	content.WriteString("}\n\n")
+	
+	// Tags block (if tags exist)
+	if len(request.Tags) > 0 {
+		content.WriteString("tags {\n")
+		for _, tag := range request.Tags {
+			content.WriteString(fmt.Sprintf("  %s\n", tag))
+		}
+		content.WriteString("}\n\n")
+	}
+	
+	// HTTP method block
+	content.WriteString(fmt.Sprintf("%s {\n", strings.ToLower(request.HTTP.Method)))
+	content.WriteString(fmt.Sprintf("  url: %s\n", request.HTTP.URL))
+	content.WriteString("}\n")
+	
+	// Query parameters
+	if len(request.Query) > 0 {
+		content.WriteString("\nquery {\n")
+		// Sort keys for consistent output
+		keys := make([]string, 0, len(request.Query))
+		for key := range request.Query {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			content.WriteString(fmt.Sprintf("  %s: %s\n", key, request.Query[key]))
+		}
+		content.WriteString("}\n")
+	}
+	
+	// Headers
+	if len(request.Headers) > 0 {
+		content.WriteString("\nheaders {\n")
+		// Sort keys for consistent output
+		keys := make([]string, 0, len(request.Headers))
+		for key := range request.Headers {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			content.WriteString(fmt.Sprintf("  %s: %s\n", key, request.Headers[key]))
+		}
+		content.WriteString("}\n")
+	}
+	
+	// Auth
+	if request.Auth.Type != "" {
+		content.WriteString("\nauth {\n")
+		content.WriteString(fmt.Sprintf("  mode: %s\n", request.Auth.Type))
+		if len(request.Auth.Values) > 0 {
+			// Sort keys for consistent output
+			keys := make([]string, 0, len(request.Auth.Values))
+			for key := range request.Auth.Values {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				content.WriteString(fmt.Sprintf("  %s: %s\n", key, request.Auth.Values[key]))
+			}
+		}
+		content.WriteString("}\n")
+	}
+	
+	// Body
+	if request.Body.Type != "" && request.Body.Data != "" {
+		content.WriteString(fmt.Sprintf("\nbody:%s {\n", request.Body.Type))
+		content.WriteString(request.Body.Data)
+		content.WriteString("\n}\n")
+	}
+	
+	// Variables
+	if len(request.Vars) > 0 {
+		content.WriteString("\nvars {\n")
+		// Sort keys for consistent output
+		keys := make([]string, 0, len(request.Vars))
+		for key := range request.Vars {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			content.WriteString(fmt.Sprintf("  %s: %s\n", key, request.Vars[key]))
+		}
+		content.WriteString("}\n")
+	}
+	
+	// Tests
+	if request.Tests != "" {
+		content.WriteString("\ntests {\n")
+		content.WriteString(request.Tests)
+		content.WriteString("\n}\n")
+	}
+	
+	// Docs
+	if request.Docs != "" {
+		content.WriteString("\ndocs {\n")
+		content.WriteString(request.Docs)
+		content.WriteString("\n}\n")
+	}
+	
+	return content.String()
+}
+
 func main() {
+	// Initialize theme system
+	currentTheme = LoadTheme("default") // Can be configurable later
+	
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v", err)

@@ -1,0 +1,19 @@
+{
+  "name": "Dark Theme",
+  "description": "A modern dark theme with blue accents",
+  "colors": {
+    "primary": "75",
+    "secondary": "39", 
+    "background": "234",
+    "surface": "235",
+    "border": "240",
+    "borderFocus": "75",
+    "text": "255",
+    "textMuted": "244",
+    "textAccent": "39",
+    "success": "34",
+    "warning": "226",
+    "error": "196",
+    "cursor": "207"
+  }
+}

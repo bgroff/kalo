@@ -1,0 +1,19 @@
+{
+  "name": "MS-DOS",
+  "description": "Classic MS-DOS green-on-black terminal aesthetic with retro computing vibes",
+  "colors": {
+    "primary": "46",
+    "secondary": "34", 
+    "background": "0",
+    "surface": "0",
+    "border": "34",
+    "borderFocus": "46",
+    "text": "46",
+    "textMuted": "34",
+    "textAccent": "82",
+    "success": "46",
+    "warning": "226",
+    "error": "196",
+    "cursor": "46"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "Midnight Commander",
+  "description": "Classic Midnight Commander blue interface with traditional DOS-style icons",
+  "colors": {
+    "primary": "51",
+    "secondary": "87", 
+    "background": "17",
+    "surface": "18",
+    "border": "51",
+    "borderFocus": "87",
+    "text": "255",
+    "textMuted": "250",
+    "textAccent": "226",
+    "success": "46",
+    "warning": "226",
+    "error": "196",
+    "cursor": "226"
+  },
+  "icons": {
+    "folderClosed": "[DIR]",
+    "folderOpen": "[DIR]",
+    "file": "    ",
+    "request": ".bru",
+    "collection": "[COL]",
+    "activeIndicator": ">",
+    "cursor": "█",
+    "listBullet": "*"
+  }
+}

@@ -15,10 +15,10 @@ type Command struct {
 }
 
 type CommandPalette struct {
-	visible         bool
-	textInput       textinput.Model
-	cursor          int
-	commands        []Command
+	visible          bool
+	textInput        textinput.Model
+	cursor           int
+	commands         []Command
 	filteredCommands []Command
 }
 
@@ -29,6 +29,7 @@ func NewCommandPalette() *CommandPalette {
 		{Name: "Edit Request", Description: "Edit the current request", Action: "edit_request"},
 		{Name: "Import OpenAPI", Description: "Import OpenAPI 3.x specification", Action: "import_openapi"},
 		{Name: "Import Collection", Description: "Import Bruno collection", Action: "import_collection"},
+		{Name: "Switch Theme", Description: "Change the application theme", Action: "switch_theme"},
 		{Name: "Settings", Description: "Open application settings", Action: "settings"},
 	}
 
@@ -92,20 +93,20 @@ func (cp *CommandPalette) HandleInput(msg tea.KeyMsg) (bool, *Command, bool) {
 		return false, nil, false
 	}
 
-	switch msg.String() {
-	case "esc":
+	switch msg.Type {
+	case tea.KeyEsc:
 		cp.Hide()
 		return true, nil, true
-	case "enter":
+	case tea.KeyEnter:
 		if cmd := cp.GetSelectedCommand(); cmd != nil {
 			cp.Hide()
 			return true, cmd, true
 		}
 		return false, nil, true
-	case "up":
+	case tea.KeyUp:
 		cp.MoveCursor(-1)
 		return false, nil, true
-	case "down":
+	case tea.KeyDown:
 		cp.MoveCursor(1)
 		return false, nil, true
 	default:
@@ -119,7 +120,7 @@ func (cp *CommandPalette) MoveCursor(direction int) {
 	if len(cp.filteredCommands) == 0 {
 		return
 	}
-	
+
 	cp.cursor += direction
 	if cp.cursor < 0 {
 		cp.cursor = len(cp.filteredCommands) - 1
@@ -135,14 +136,13 @@ func (cp *CommandPalette) GetSelectedCommand() *Command {
 	return &cp.filteredCommands[cp.cursor]
 }
 
-
 func (cp *CommandPalette) updateFiltered() {
 	cp.filteredCommands = []Command{}
 	searchTerm := strings.ToLower(cp.textInput.Value())
-	
+
 	for _, cmd := range cp.commands {
 		if strings.Contains(strings.ToLower(cmd.Name), searchTerm) ||
-		   strings.Contains(strings.ToLower(cmd.Description), searchTerm) {
+			strings.Contains(strings.ToLower(cmd.Description), searchTerm) {
 			cp.filteredCommands = append(cp.filteredCommands, cmd)
 		}
 	}
@@ -155,8 +155,8 @@ func (cp *CommandPalette) Render(width, height int) string {
 
 	// Command palette styles
 	paletteStyle := lipgloss.NewStyle().
-		Width(width - 20).
-		Height(height - 10).
+		Width(width-20).
+		Height(height-10).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(1, 2).
@@ -174,18 +174,18 @@ func (cp *CommandPalette) Render(width, height int) string {
 
 	// Build content
 	var content strings.Builder
-	
+
 	// Title
 	content.WriteString(lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("86")).
 		Render("Command Palette"))
 	content.WriteString("\n\n")
-	
+
 	// Input field using textinput component
 	content.WriteString(cp.textInput.View())
 	content.WriteString("\n\n")
-	
+
 	// Commands list
 	if len(cp.filteredCommands) == 0 {
 		content.WriteString(lipgloss.NewStyle().
@@ -205,13 +205,13 @@ func (cp *CommandPalette) Render(width, height int) string {
 			}
 		}
 	}
-	
+
 	// Help text
 	content.WriteString("\n\n")
 	content.WriteString(lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		Render("↑↓: Navigate • Enter: Execute • Esc: Close"))
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, 
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
 		paletteStyle.Render(content.String()))
 }

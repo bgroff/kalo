@@ -19,6 +19,7 @@ const (
 	ConfirmInput
 	MethodURLInput
 	OpenAPIImportInput
+	ThemeSelectionInput
 )
 
 type InputSpec struct {
@@ -38,14 +39,18 @@ type InputDialog struct {
 	textInput       textinput.Model
 	urlInput        textinput.Model
 	nameInput       textinput.Model
+	tagsInput       textinput.Model
 	collectionInput textinput.Model
 	filePicker      filepicker.Model
 	confirmed       bool
 	selectedMethod  int
 	methods         []string
-	currentField    int // 0 = method, 1 = name, 2 = url (for MethodURLInput) OR 0 = url/file, 1 = collection (for OpenAPIImportInput)
+	currentField    int // 0 = method, 1 = name, 2 = url, 3 = tags (for MethodURLInput) OR 0 = url/file, 1 = collection (for OpenAPIImportInput)
 	selectedFile    string
 	useFilePicker   bool // whether to show file picker or URL input for OpenAPI
+	// Theme selection fields
+	themes          []string
+	selectedTheme   int
 }
 
 func NewInputDialog() *InputDialog {
@@ -62,6 +67,11 @@ func NewInputDialog() *InputDialog {
 	urlTi := textinput.New()
 	urlTi.Placeholder = "https://api.example.com/endpoint"
 	urlTi.Width = 50
+	
+	// Create tags input for method/URL dialog
+	tagsTi := textinput.New()
+	tagsTi.Placeholder = "tag1, tag2, tag3"
+	tagsTi.Width = 50
 	
 	// Create collection input for OpenAPI import
 	collectionTi := textinput.New()
@@ -82,12 +92,15 @@ func NewInputDialog() *InputDialog {
 		textInput:       ti,
 		nameInput:       nameTi,
 		urlInput:        urlTi,
+		tagsInput:       tagsTi,
 		collectionInput: collectionTi,
 		filePicker:      fp,
 		methods:         []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "QUERY"},
 		selectedMethod:  0,
 		currentField:    0,
 		useFilePicker:   true, // Default to file picker for OpenAPI
+		themes:          GetAvailableThemes(),
+		selectedTheme:   0,
 	}
 }
 
@@ -102,6 +115,7 @@ func (id *InputDialog) Show(spec InputSpec) {
 	id.textInput.SetValue("")
 	id.nameInput.SetValue("")
 	id.urlInput.SetValue("")
+	id.tagsInput.SetValue("")
 	id.collectionInput.SetValue("")
 	
 	// Pre-fill values if this is an edit operation
@@ -123,6 +137,9 @@ func (id *InputDialog) Show(spec InputSpec) {
 			if url, ok := spec.PreFill["url"].(string); ok {
 				id.urlInput.SetValue(url)
 			}
+			if tags, ok := spec.PreFill["tags"].([]string); ok {
+				id.tagsInput.SetValue(strings.Join(tags, ", "))
+			}
 		} else {
 			// Pre-fill general text input
 			if value, ok := spec.PreFill["value"].(string); ok {
@@ -135,11 +152,13 @@ func (id *InputDialog) Show(spec InputSpec) {
 		id.textInput.Blur()
 		id.nameInput.Focus() // Start with name field focused
 		id.urlInput.Blur()
+		id.tagsInput.Blur()
 		id.collectionInput.Blur()
 	} else if spec.Type == OpenAPIImportInput {
 		id.textInput.Blur()
 		id.nameInput.Blur()
 		id.urlInput.Blur()
+		id.tagsInput.Blur()
 		id.collectionInput.Blur()
 		id.useFilePicker = true // Default to file picker
 		id.selectedFile = ""
@@ -147,10 +166,26 @@ func (id *InputDialog) Show(spec InputSpec) {
 		// Re-initialize file picker to current directory
 		homeDir, _ := os.UserHomeDir()
 		id.filePicker.CurrentDirectory = homeDir
+	} else if spec.Type == ThemeSelectionInput {
+		// Theme selection - no text input needed
+		id.textInput.Blur()
+		id.nameInput.Blur()
+		id.urlInput.Blur()
+		id.tagsInput.Blur()
+		id.collectionInput.Blur()
+		// Find current theme in list
+		currentThemeName := GetCurrentThemeName()
+		for i, theme := range id.themes {
+			if theme == currentThemeName {
+				id.selectedTheme = i
+				break
+			}
+		}
 	} else {
 		id.textInput.Focus()
 		id.nameInput.Blur()
 		id.urlInput.Blur()
+		id.tagsInput.Blur()
 		id.collectionInput.Blur()
 		
 		// Set placeholder for text input
@@ -175,6 +210,7 @@ func (id *InputDialog) Hide() {
 	id.collectionInput.SetValue("")
 	id.selectedFile = ""
 	id.useFilePicker = true
+	id.selectedTheme = 0
 	id.textInput.Blur()
 	id.nameInput.Blur()
 	id.urlInput.Blur()
@@ -196,10 +232,23 @@ func (id *InputDialog) GetInput() string {
 func (id *InputDialog) GetResult() (string, string, map[string]interface{}, bool) {
 	if id.spec.Type == MethodURLInput {
 		// For method/URL input, combine the results
+		// Parse tags from comma-separated string
+		tagsString := strings.TrimSpace(id.tagsInput.Value())
+		var tags []string
+		if tagsString != "" {
+			for _, tag := range strings.Split(tagsString, ",") {
+				trimmed := strings.TrimSpace(tag)
+				if trimmed != "" {
+					tags = append(tags, trimmed)
+				}
+			}
+		}
+		
 		result := map[string]interface{}{
 			"method": id.methods[id.selectedMethod],
 			"name":   id.nameInput.Value(),
 			"url":    id.urlInput.Value(),
+			"tags":   tags,
 		}
 		
 		// Merge ActionData (contains filePath for edit operations)
@@ -223,16 +272,25 @@ func (id *InputDialog) GetResult() (string, string, map[string]interface{}, bool
 			"collection": id.collectionInput.Value(),
 		}
 		return "", id.spec.Action, result, id.confirmed
+	} else if id.spec.Type == ThemeSelectionInput {
+		// For theme selection, return the selected theme name
+		if id.selectedTheme < len(id.themes) {
+			result := map[string]interface{}{
+				"theme": id.themes[id.selectedTheme],
+			}
+			return "", id.spec.Action, result, id.confirmed
+		}
 	}
 	return id.textInput.Value(), id.spec.Action, id.spec.ActionData, id.confirmed
 }
 
 func (id *InputDialog) SwitchField() {
 	if id.spec.Type == MethodURLInput {
-		id.currentField = (id.currentField + 1) % 3
+		id.currentField = (id.currentField + 1) % 4
 		// Blur all inputs first
 		id.nameInput.Blur()
 		id.urlInput.Blur()
+		id.tagsInput.Blur()
 		
 		switch id.currentField {
 		case 0:
@@ -243,6 +301,9 @@ func (id *InputDialog) SwitchField() {
 		case 2:
 			// Focus on URL input
 			id.urlInput.Focus()
+		case 3:
+			// Focus on tags input
+			id.tagsInput.Focus()
 		}
 	} else if id.spec.Type == OpenAPIImportInput {
 		// Blur all inputs first
@@ -250,12 +311,23 @@ func (id *InputDialog) SwitchField() {
 		id.collectionInput.Blur()
 		
 		if id.useFilePicker {
-			// Switch to URL mode
+			// Switch to URL mode - focus on URL input first
 			id.useFilePicker = false
 			id.textInput.Focus()
+			id.currentField = 0 // URL field
 		} else {
-			// Switch to file picker mode
-			id.useFilePicker = true
+			// Switch between URL and collection input in URL mode, or back to file picker
+			if id.currentField == 0 {
+				// Currently on URL, switch to collection
+				id.currentField = 1
+				id.textInput.Blur()
+				id.collectionInput.Focus()
+			} else {
+				// Currently on collection, switch back to file picker mode
+				id.useFilePicker = true
+				id.currentField = 0
+				id.collectionInput.Blur()
+			}
 		}
 	}
 }
@@ -271,6 +343,13 @@ func (id *InputDialog) MoveMethodSelection(direction int) {
 			id.selectedMethod = len(id.methods) - 1
 		} else if id.selectedMethod >= len(id.methods) {
 			id.selectedMethod = 0
+		}
+	} else if id.spec.Type == ThemeSelectionInput {
+		id.selectedTheme += direction
+		if id.selectedTheme < 0 {
+			id.selectedTheme = len(id.themes) - 1
+		} else if id.selectedTheme >= len(id.themes) {
+			id.selectedTheme = 0
 		}
 	}
 }
@@ -324,14 +403,22 @@ func (id *InputDialog) UpdateTextInputs(msg interface{}) {
 		case 2:
 			// Update URL input when it's focused
 			id.urlInput, _ = id.urlInput.Update(msg)
+		case 3:
+			// Update tags input when it's focused
+			id.tagsInput, _ = id.tagsInput.Update(msg)
 		}
 	} else if id.spec.Type == OpenAPIImportInput {
 		if !id.useFilePicker {
-			// URL input mode - update text input
-			id.textInput, _ = id.textInput.Update(msg)
+			// URL input mode - update the focused input
+			if id.currentField == 0 {
+				// URL input
+				id.textInput, _ = id.textInput.Update(msg)
+			} else if id.currentField == 1 {
+				// Collection input
+				id.collectionInput, _ = id.collectionInput.Update(msg)
+			}
 		}
 		// Note: File picker is handled separately in HandleFilePickerUpdate
-		// Collection input handled when focused (if we add that later)
 	} else {
 		// Update general text input for other types
 		id.textInput, _ = id.textInput.Update(msg)
@@ -460,6 +547,16 @@ func (id *InputDialog) Render(width, height int) string {
 		content.WriteString(id.urlInput.View())
 		content.WriteString("\n\n")
 
+		// Tags input
+		content.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("250")).
+			Render("Tags (comma-separated):"))
+		content.WriteString("\n")
+		
+		// Use textinput component for tags
+		content.WriteString(id.tagsInput.View())
+		content.WriteString("\n\n")
+
 		// Help text
 		actionText := "Create"
 		if id.spec.IsEdit {
@@ -516,6 +613,33 @@ func (id *InputDialog) Render(width, height int) string {
 		content.WriteString(lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			Render(fmt.Sprintf("Mode: %s • Tab: Switch modes • Enter: Import • Esc: Cancel", mode)))
+	
+	case ThemeSelectionInput:
+		// Theme selection list
+		content.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("250")).
+			Render("Select Theme:"))
+		content.WriteString("\n\n")
+		
+		for i, theme := range id.themes {
+			if i == id.selectedTheme {
+				content.WriteString(lipgloss.NewStyle().
+					Background(lipgloss.Color("62")).
+					Foreground(lipgloss.Color("230")).
+					Padding(0, 1).
+					Render("▶ " + theme))
+			} else {
+				content.WriteString("  " + theme)
+			}
+			if i < len(id.themes)-1 {
+				content.WriteString("\n")
+			}
+		}
+		
+		content.WriteString("\n\n")
+		content.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Render("↑↓: Navigate • Enter: Apply Theme • Esc: Cancel"))
 	}
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,

@@ -1,0 +1,19 @@
+{
+  "name": "Light Theme", 
+  "description": "A clean light theme for bright environments",
+  "colors": {
+    "primary": "25",
+    "secondary": "28",
+    "background": "255",
+    "surface": "254",
+    "border": "240",
+    "borderFocus": "25",
+    "text": "16",
+    "textMuted": "240",
+    "textAccent": "28",
+    "success": "34",
+    "warning": "172",
+    "error": "196",
+    "cursor": "25"
+  }
+}

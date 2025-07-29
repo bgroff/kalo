@@ -1,0 +1,29 @@
+{
+  "name": "btop",
+  "description": "System monitor inspired theme with dark background and bright accent colors like btop++",
+  "colors": {
+    "primary": "39",
+    "secondary": "46", 
+    "background": "235",
+    "surface": "236",
+    "border": "240",
+    "borderFocus": "39",
+    "text": "255",
+    "textMuted": "244",
+    "textAccent": "46",
+    "success": "46",
+    "warning": "220",
+    "error": "196",
+    "cursor": "39"
+  },
+  "icons": {
+    "folderClosed": "📁",
+    "folderOpen": "📂",
+    "file": "📄",
+    "request": "⚡",
+    "collection": "📊",
+    "activeIndicator": "▶",
+    "cursor": "█",
+    "listBullet": "●"
+  }
+}
