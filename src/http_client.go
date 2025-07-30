@@ -10,7 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"kalo/src/panels"
+	request "kalo/src/panels/request"
+	response "kalo/src/panels/response"
 )
 
 
@@ -26,7 +27,7 @@ func NewHTTPClient() *HTTPClient {
 	}
 }
 
-func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResponse, error) {
+func (c *HTTPClient) ExecuteRequest(bruReq *request.BruRequest) (*response.HTTPResponse, error) {
 	if bruReq == nil {
 		return nil, fmt.Errorf("request is nil")
 	}
@@ -39,7 +40,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 	// Parse URL and add query parameters
 	parsedURL, err := url.Parse(processedURL)
 	if err != nil {
-		return &panels.HTTPResponse{Error: fmt.Sprintf("Invalid URL: %v", err)}, nil
+		return &response.HTTPResponse{Error: fmt.Sprintf("Invalid URL: %v", err)}, nil
 	}
 
 	// Add query parameters
@@ -74,7 +75,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 	// Create HTTP request
 	req, err := http.NewRequest(bruReq.HTTP.Method, parsedURL.String(), body)
 	if err != nil {
-		return &panels.HTTPResponse{Error: fmt.Sprintf("Failed to create request: %v", err)}, nil
+		return &response.HTTPResponse{Error: fmt.Sprintf("Failed to create request: %v", err)}, nil
 	}
 
 	// Add headers
@@ -87,7 +88,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 	if bruReq.Auth.Type != "" {
 		err := c.addAuth(req, bruReq.Auth, bruReq.Vars)
 		if err != nil {
-			return &panels.HTTPResponse{Error: fmt.Sprintf("Auth error: %v", err)}, nil
+			return &response.HTTPResponse{Error: fmt.Sprintf("Auth error: %v", err)}, nil
 		}
 	}
 
@@ -96,7 +97,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 	responseTime := time.Since(start)
 
 	if err != nil {
-		return &panels.HTTPResponse{
+		return &response.HTTPResponse{
 			Error:        fmt.Sprintf("Request failed: %v", err),
 			ResponseTime: responseTime,
 		}, nil
@@ -106,7 +107,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 	// Read response body
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return &panels.HTTPResponse{
+		return &response.HTTPResponse{
 			StatusCode:   resp.StatusCode,
 			Status:       resp.Status,
 			Error:        fmt.Sprintf("Failed to read response body: %v", err),
@@ -137,7 +138,7 @@ func (c *HTTPClient) ExecuteRequest(bruReq *panels.BruRequest) (*panels.HTTPResp
 		}
 	}
 
-	return &panels.HTTPResponse{
+	return &response.HTTPResponse{
 		StatusCode:   resp.StatusCode,
 		Status:       resp.Status,
 		Headers:      headers,
@@ -164,7 +165,7 @@ func (c *HTTPClient) substituteVars(text string, vars map[string]string) string 
 	})
 }
 
-func (c *HTTPClient) addAuth(req *http.Request, auth panels.BruAuth, vars map[string]string) error {
+func (c *HTTPClient) addAuth(req *http.Request, auth request.BruAuth, vars map[string]string) error {
 	switch auth.Type {
 	case "bearer":
 		if token, exists := auth.Values["token"]; exists {
@@ -194,7 +195,7 @@ func (c *HTTPClient) addAuth(req *http.Request, auth panels.BruAuth, vars map[st
 	return nil
 }
 
-func (c *HTTPClient) FormatResponseForDisplay(httpResp *panels.HTTPResponse) string {
+func (c *HTTPClient) FormatResponseForDisplay(httpResp *response.HTTPResponse) string {
 	if httpResp == nil {
 		return "No response"
 	}

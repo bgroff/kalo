@@ -1,6 +1,7 @@
 package panels
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -36,7 +37,6 @@ const (
 	BodySection
 	HeadersSection
 	AuthSection
-	TagsSection
 )
 
 type QueryEditMode int
@@ -46,14 +46,6 @@ const (
 	QueryEditKeyMode
 	QueryEditValueMode
 	QueryAddMode
-)
-
-type TagEditMode int
-
-const (
-	TagViewMode TagEditMode = iota
-	TagEditingMode
-	TagAddMode
 )
 
 type QueryParameter struct {
@@ -70,15 +62,6 @@ type QueryEditState struct {
 	Parameters        []QueryParameter
 	OriginalKey       string
 	PendingDeletion   int // -1 means no pending deletion
-}
-
-type TagEditState struct {
-	Mode            TagEditMode
-	SelectedIndex   int
-	EditingTag      string
-	CursorPos       int
-	Tags            []string
-	PendingDeletion int // -1 means no pending deletion
 }
 
 type HeaderEditMode int
@@ -106,6 +89,43 @@ type HeaderEditState struct {
 	PendingDeletion   int // -1 means no pending deletion
 }
 
+type AuthEditMode int
+
+const (
+	AuthViewMode AuthEditMode = iota
+	AuthTypeSelectMode
+	AuthBearerEditMode
+	AuthBasicUsernameEditMode
+	AuthBasicPasswordEditMode
+)
+
+type AuthEditState struct {
+	Mode              AuthEditMode
+	SelectedField     int    // 0 = type selector, 1 = first field, 2 = second field
+	AuthType          string // "none", "bearer", "basic"
+	BearerToken       string
+	BasicUsername     string
+	BasicPassword     string
+	CursorPos         int
+}
+
+type BodyEditMode int
+
+const (
+	BodyViewMode BodyEditMode = iota
+	BodyTextEditMode
+)
+
+type BodyEditState struct {
+	Mode              BodyEditMode
+	Content           string
+	CursorLine        int
+	CursorCol         int
+	ScrollOffset      int
+	ValidationError   string
+	BracketMatches    map[int]int // line -> matching bracket line
+}
+
 type BruRequest struct {
 	Meta    BruMeta           `json:"meta"`
 	HTTP    BruHTTP           `json:"http"`
@@ -120,8 +140,9 @@ type BruRequest struct {
 	
 	// Edit state for interactive editing
 	QueryEditState  *QueryEditState  `json:"-"`
-	TagEditState    *TagEditState    `json:"-"`
 	HeaderEditState *HeaderEditState `json:"-"`
+	AuthEditState   *AuthEditState   `json:"-"`
+	BodyEditState   *BodyEditState   `json:"-"`
 }
 
 type BruMeta struct {
@@ -226,86 +247,6 @@ func (r *BruRequest) DeleteQueryParameter(index int) {
 	r.SyncQueryToMap()
 }
 
-// InitializeTagEditState initializes the tag edit state for a request
-func (r *BruRequest) InitializeTagEditState() {
-	if r.TagEditState != nil {
-		return
-	}
-	
-	// Create a copy of tags for editing
-	tags := make([]string, len(r.Tags))
-	copy(tags, r.Tags)
-	
-	r.TagEditState = &TagEditState{
-		Mode:            TagViewMode,
-		SelectedIndex:   0,
-		Tags:            tags,
-		PendingDeletion: -1,
-	}
-}
-
-// SyncTagsToSlice updates the Tags slice from the edit state
-func (r *BruRequest) SyncTagsToSlice() {
-	if r.TagEditState == nil {
-		return
-	}
-	
-	r.Tags = make([]string, len(r.TagEditState.Tags))
-	copy(r.Tags, r.TagEditState.Tags)
-}
-
-// AddTag adds a new tag
-func (r *BruRequest) AddTag(tag string) {
-	if r.TagEditState == nil {
-		r.InitializeTagEditState()
-	}
-	
-	// Check if tag already exists to avoid duplicates
-	for _, existingTag := range r.TagEditState.Tags {
-		if existingTag == tag {
-			return
-		}
-	}
-	
-	r.TagEditState.Tags = append(r.TagEditState.Tags, tag)
-	r.SyncTagsToSlice()
-}
-
-// UpdateTag updates an existing tag
-func (r *BruRequest) UpdateTag(index int, newTag string) {
-	if r.TagEditState == nil || index < 0 || index >= len(r.TagEditState.Tags) {
-		return
-	}
-	
-	// Check if new tag already exists (and is not the current one being edited)
-	for i, existingTag := range r.TagEditState.Tags {
-		if i != index && existingTag == newTag {
-			return
-		}
-	}
-	
-	r.TagEditState.Tags[index] = newTag
-	r.SyncTagsToSlice()
-}
-
-// DeleteTag removes a tag
-func (r *BruRequest) DeleteTag(index int) {
-	if r.TagEditState == nil || index < 0 || index >= len(r.TagEditState.Tags) {
-		return
-	}
-	
-	r.TagEditState.Tags = append(
-		r.TagEditState.Tags[:index],
-		r.TagEditState.Tags[index+1:]...,
-	)
-	
-	// Adjust selected index if necessary
-	if r.TagEditState.SelectedIndex >= len(r.TagEditState.Tags) && len(r.TagEditState.Tags) > 0 {
-		r.TagEditState.SelectedIndex = len(r.TagEditState.Tags) - 1
-	}
-	
-	r.SyncTagsToSlice()
-}
 
 // InitializeHeaderEditState initializes the header edit state for a request
 func (r *BruRequest) InitializeHeaderEditState() {
@@ -388,8 +329,133 @@ func (r *BruRequest) DeleteHeader(index int) {
 	r.SyncHeadersToMap()
 }
 
+// InitializeAuthEditState initializes the auth edit state for a request
+func (r *BruRequest) InitializeAuthEditState() {
+	if r.AuthEditState != nil {
+		return
+	}
+	
+	// Determine current auth type and extract values
+	authType := "none"
+	bearerToken := ""
+	basicUsername := ""
+	basicPassword := ""
+	
+	if r.Auth.Type == "bearer" {
+		authType = "bearer"
+		if token, exists := r.Auth.Values["token"]; exists {
+			bearerToken = token
+		}
+	} else if r.Auth.Type == "basic" {
+		authType = "basic"
+		if username, exists := r.Auth.Values["username"]; exists {
+			basicUsername = username
+		}
+		if password, exists := r.Auth.Values["password"]; exists {
+			basicPassword = password
+		}
+	}
+	
+	r.AuthEditState = &AuthEditState{
+		Mode:          AuthViewMode,
+		SelectedField: 0,
+		AuthType:      authType,
+		BearerToken:   bearerToken,
+		BasicUsername: basicUsername,
+		BasicPassword: basicPassword,
+		CursorPos:     0,
+	}
+}
+
+// SyncAuthToRequest updates the BruAuth from the edit state
+func (r *BruRequest) SyncAuthToRequest() {
+	if r.AuthEditState == nil {
+		return
+	}
+	
+	switch r.AuthEditState.AuthType {
+	case "none":
+		r.Auth.Type = ""
+		r.Auth.Values = nil
+	case "bearer":
+		r.Auth.Type = "bearer"
+		if r.Auth.Values == nil {
+			r.Auth.Values = make(map[string]string)
+		}
+		r.Auth.Values["token"] = r.AuthEditState.BearerToken
+	case "basic":
+		r.Auth.Type = "basic"
+		if r.Auth.Values == nil {
+			r.Auth.Values = make(map[string]string)
+		}
+		r.Auth.Values["username"] = r.AuthEditState.BasicUsername
+		r.Auth.Values["password"] = r.AuthEditState.BasicPassword
+	}
+}
+
+// InitializeBodyEditState initializes the body edit state for a request
+func (r *BruRequest) InitializeBodyEditState() {
+	if r.BodyEditState != nil {
+		return
+	}
+	
+	content := r.Body.Data
+	if content == "" {
+		content = ""
+	}
+	
+	r.BodyEditState = &BodyEditState{
+		Mode:            BodyViewMode,
+		Content:         content,
+		CursorLine:      0,
+		CursorCol:       0,
+		ScrollOffset:    0,
+		ValidationError: "",
+		BracketMatches:  make(map[int]int),
+	}
+	
+	// Validate JSON if body type is JSON
+	if r.Body.Type == "json" {
+		r.ValidateBodyJSON()
+	}
+}
+
+// SyncBodyToRequest updates the Body from the edit state
+func (r *BruRequest) SyncBodyToRequest() {
+	if r.BodyEditState == nil {
+		return
+	}
+	
+	r.Body.Data = r.BodyEditState.Content
+	
+	// Validate JSON if body type is JSON
+	if r.Body.Type == "json" {
+		r.ValidateBodyJSON()
+	}
+}
+
+// ValidateBodyJSON validates the JSON content and updates validation error
+func (r *BruRequest) ValidateBodyJSON() {
+	if r.BodyEditState == nil {
+		return
+	}
+	
+	content := strings.TrimSpace(r.BodyEditState.Content)
+	if content == "" {
+		r.BodyEditState.ValidationError = ""
+		return
+	}
+	
+	var jsonData interface{}
+	if err := json.Unmarshal([]byte(content), &jsonData); err != nil {
+		r.BodyEditState.ValidationError = err.Error()
+	} else {
+		r.BodyEditState.ValidationError = ""
+	}
+}
+
 func GetRequestTabNames() []string {
-	return []string{"Query Parameters", "Request Body", "Headers", "Authorization", "Tags"}
+	return []string{"Query Parameters", "Request Body", "Headers", "Authorization"}
 }
 
 func GetRequestTabSection(tabIndex int) RequestSection {
@@ -402,8 +468,6 @@ func GetRequestTabSection(tabIndex int) RequestSection {
 		return HeadersSection
 	case 3:
 		return AuthSection
-	case 4:
-		return TagsSection
 	default:
 		return QuerySection
 	}
@@ -441,35 +505,13 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 	}
 
 	if currentReq == nil {
-		title := titleStyle.Render(" Request ")
-		titleBar := lipgloss.NewStyle().
-			Width(width-2).
-			Align(lipgloss.Left).
-			Render(title)
-		
-		content := lipgloss.JoinVertical(lipgloss.Left, titleBar, "No request selected")
+		content := "No request selected"
 		return style.
 			Width(width).
 			Height(height).
 			Padding(0, 1).
 			Render(content)
 	}
-
-	// Create title with method and URL
-	titleContent := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		" Request ",
-		"│ ",
-		methodStyle.Render(currentReq.HTTP.Method),
-		" ",
-		urlStyle.Render(currentReq.HTTP.URL),
-		" ",
-	)
-	title := titleStyle.Render(titleContent)
-	titleBar := lipgloss.NewStyle().
-		Width(width-2).
-		Align(lipgloss.Left).
-		Render(title)
 
 	// Render tabs (account for panel padding and border)
 	tabs := GetRequestTabNames()
@@ -488,11 +530,9 @@ func RenderRequest(width, height int, currentReq *BruRequest, activePanel bool, 
 		tabContent = renderHeadersContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle, textCursorStyle)
 	case AuthSection:
 		tabContent = renderAuthContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle)
-	case TagsSection:
-		tabContent = renderTagsContent(currentReq, activePanel, requestCursor, currentSection, cursorStyle, sectionStyle, textCursorStyle)
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, tabsRender, tabContent)
+	content := lipgloss.JoinVertical(lipgloss.Left, tabsRender, tabContent)
 
 	return style.
 		Width(width).
@@ -597,11 +637,297 @@ func renderQueryContent(currentReq *BruRequest, activePanel bool, requestCursor 
 }
 
 func renderBodyContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle lipgloss.Style) string {
-	if currentReq.Body.Type == "" || currentReq.Body.Data == "" {
-		return "  No request body"
+	// Initialize edit state if needed
+	currentReq.InitializeBodyEditState()
+	editState := currentReq.BodyEditState
+	
+	var lines []string
+	
+	// Add help text at the top when in body section
+	if activePanel && requestCursor == currentSection {
+		switch editState.Mode {
+		case BodyViewMode:
+			lines = append(lines, "  Enter/i: Edit • Esc: Cancel")
+		case BodyTextEditMode:
+			lines = append(lines, "  Ctrl+S: Save • Esc: Cancel • Arrow keys: Navigate")
+		}
+		lines = append(lines, "")
 	}
+	
+	// Show body type
+	lines = append(lines, fmt.Sprintf("  Type: %s", currentReq.Body.Type))
+	
+	// Show validation error if exists
+	if editState.ValidationError != "" {
+		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
+		lines = append(lines, "")
+		lines = append(lines, errorStyle.Render("  ✗ JSON Error: "+editState.ValidationError))
+	}
+	
+	lines = append(lines, "")
+	
+	if editState.Content == "" {
+		helpText := "  No request body"
+		if activePanel && requestCursor == currentSection {
+			helpText += "\n\n  Press Enter or 'i' to start editing"
+		}
+		lines = append(lines, helpText)
+		return strings.Join(lines, "\n")
+	}
+	
+	// Render content based on mode
+	if editState.Mode == BodyTextEditMode && activePanel && requestCursor == currentSection {
+		// Edit mode: show content with cursor
+		contentLines := renderBodyEditMode(editState, currentReq.Body.Type, cursorStyle)
+		lines = append(lines, contentLines...)
+	} else {
+		// View mode: show formatted content
+		contentLines := renderBodyViewMode(editState, currentReq.Body.Type)
+		lines = append(lines, contentLines...)
+	}
+	
+	return strings.Join(lines, "\n")
+}
 
-	return fmt.Sprintf("  Type: %s\n\n%s", currentReq.Body.Type, currentReq.Body.Data)
+// renderBodyViewMode renders the body in view mode with syntax highlighting
+func renderBodyViewMode(editState *BodyEditState, bodyType string) []string {
+	content := editState.Content
+	
+	if bodyType == "json" {
+		return renderJSONContent(content, false, 0, 0)
+	}
+	
+	// For non-JSON content, just show as plain text with indentation
+	contentLines := strings.Split(content, "\n")
+	var lines []string
+	for _, line := range contentLines {
+		lines = append(lines, "  "+line)
+	}
+	return lines
+}
+
+// renderBodyEditMode renders the body in edit mode with cursor
+func renderBodyEditMode(editState *BodyEditState, bodyType string, cursorStyle lipgloss.Style) []string {
+	content := editState.Content
+	
+	if bodyType == "json" {
+		return renderJSONContent(content, true, editState.CursorLine, editState.CursorCol)
+	}
+	
+	// For non-JSON content, show with cursor
+	contentLines := strings.Split(content, "\n")
+	var lines []string
+	
+	for i, line := range contentLines {
+		prefix := "  "
+		if i == editState.CursorLine {
+			// Show cursor on this line
+			if editState.CursorCol <= len(line) {
+				before := line[:editState.CursorCol]
+				var cursorChar string
+				var after string
+				
+				if editState.CursorCol < len(line) {
+					cursorChar = string(line[editState.CursorCol])
+					after = line[editState.CursorCol+1:]
+				} else {
+					cursorChar = " "
+					after = ""
+				}
+				
+				cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("240"))
+				lineWithCursor := before + cursorStyle.Render(cursorChar) + after
+				lines = append(lines, prefix+lineWithCursor)
+			} else {
+				cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("240"))
+				lines = append(lines, prefix+line+cursorStyle.Render(" "))
+			}
+		} else {
+			lines = append(lines, prefix+line)
+		}
+	}
+	
+	return lines
+}
+
+// renderJSONContent renders JSON with syntax highlighting
+func renderJSONContent(content string, showCursor bool, cursorLine, cursorCol int) []string {
+	// Define styles for JSON syntax highlighting
+	stringStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))     // Green
+	numberStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))     // Yellow
+	boolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("4"))       // Blue
+	nullStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))       // Gray
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))        // Cyan
+	bracketStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("5"))    // Magenta
+	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("240"))
+	
+	contentLines := strings.Split(content, "\n")
+	var lines []string
+	
+	for i, line := range contentLines {
+		prefix := "  "
+		highlightedLine := highlightJSONLine(line, stringStyle, numberStyle, boolStyle, nullStyle, keyStyle, bracketStyle)
+		
+		if showCursor && i == cursorLine {
+			// Add cursor to this line
+			if cursorCol <= len(line) {
+				// Split the highlighted line at cursor position
+				before := highlightJSONLine(line[:cursorCol], stringStyle, numberStyle, boolStyle, nullStyle, keyStyle, bracketStyle)
+				var cursorChar string
+				var after string
+				
+				if cursorCol < len(line) {
+					cursorChar = string(line[cursorCol])
+					after = highlightJSONLine(line[cursorCol+1:], stringStyle, numberStyle, boolStyle, nullStyle, keyStyle, bracketStyle)
+				} else {
+					cursorChar = " "
+					after = ""
+				}
+				
+				lineWithCursor := before + cursorStyle.Render(cursorChar) + after
+				lines = append(lines, prefix+lineWithCursor)
+			} else {
+				lines = append(lines, prefix+highlightedLine+cursorStyle.Render(" "))
+			}
+		} else {
+			lines = append(lines, prefix+highlightedLine)
+		}
+	}
+	
+	return lines
+}
+
+// highlightJSONLine applies syntax highlighting to a single line of JSON
+func highlightJSONLine(line string, stringStyle, numberStyle, boolStyle, nullStyle, keyStyle, bracketStyle lipgloss.Style) string {
+	if strings.TrimSpace(line) == "" {
+		return line
+	}
+	
+	result := ""
+	inString := false
+	isKey := false
+	escaped := false
+	
+	for i, char := range line {
+		switch char {
+		case '"':
+			if !escaped {
+				inString = !inString
+				if inString {
+					// Check if this might be a key (look ahead for :)
+					remaining := line[i:]
+					colonIndex := strings.Index(remaining, ":")
+					nextQuoteIndex := strings.Index(remaining[1:], "\"")
+					if colonIndex != -1 && (nextQuoteIndex == -1 || colonIndex < nextQuoteIndex+1) {
+						isKey = true
+					}
+				}
+			}
+			if inString && isKey {
+				result += keyStyle.Render(string(char))
+			} else if inString {
+				result += stringStyle.Render(string(char))
+			} else {
+				result += string(char)
+			}
+			escaped = false
+		case '\\':
+			if inString {
+				if isKey {
+					result += keyStyle.Render(string(char))
+				} else {
+					result += stringStyle.Render(string(char))
+				}
+				escaped = !escaped
+			} else {
+				result += string(char)
+				escaped = false
+			}
+		case '{', '}', '[', ']':
+			if !inString {
+				result += bracketStyle.Render(string(char))
+			} else {
+				if isKey {
+					result += keyStyle.Render(string(char))
+				} else {
+					result += stringStyle.Render(string(char))
+				}
+			}
+			escaped = false
+		case ':':
+			if !inString {
+				result += string(char)
+				isKey = false
+			} else {
+				if isKey {
+					result += keyStyle.Render(string(char))
+				} else {
+					result += stringStyle.Render(string(char))
+				}
+			}
+			escaped = false
+		default:
+			if inString {
+				if isKey {
+					result += keyStyle.Render(string(char))
+				} else {
+					result += stringStyle.Render(string(char))
+				}
+			} else {
+				// Check for numbers, booleans, null
+				remaining := line[i:]
+				if char >= '0' && char <= '9' || char == '-' || char == '.' {
+					// Might be a number, find the end
+					numEnd := i
+					for j := i; j < len(line); j++ {
+						c := line[j]
+						if (c >= '0' && c <= '9') || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+' {
+							numEnd = j
+						} else {
+							break
+						}
+					}
+					if numEnd > i {
+						number := line[i:numEnd+1]
+						result += numberStyle.Render(number)
+						// Skip ahead
+						for j := i + 1; j <= numEnd; j++ {
+							if j < len(line) {
+								char = rune(line[j])
+							}
+						}
+						continue
+					}
+				} else if strings.HasPrefix(remaining, "true") {
+					result += boolStyle.Render("true")
+					// Skip ahead 3 more characters
+					for j := 0; j < 3 && i+j+1 < len(line); j++ {
+						char = rune(line[i+j+1])
+					}
+					continue
+				} else if strings.HasPrefix(remaining, "false") {
+					result += boolStyle.Render("false")
+					// Skip ahead 4 more characters
+					for j := 0; j < 4 && i+j+1 < len(line); j++ {
+						char = rune(line[i+j+1])
+					}
+					continue
+				} else if strings.HasPrefix(remaining, "null") {
+					result += nullStyle.Render("null")
+					// Skip ahead 3 more characters
+					for j := 0; j < 3 && i+j+1 < len(line); j++ {
+						char = rune(line[i+j+1])
+					}
+					continue
+				}
+				
+				result += string(char)
+			}
+			escaped = false
+		}
+	}
+	
+	return result
 }
 
 func renderHeadersContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle, textCursorStyle lipgloss.Style) string {
@@ -700,106 +1026,135 @@ func renderHeadersContent(currentReq *BruRequest, activePanel bool, requestCurso
 }
 
 func renderAuthContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle lipgloss.Style) string {
-	if currentReq.Auth.Type == "" {
-		return "  No authorization"
-	}
-
-	var lines []string
-	lines = append(lines, fmt.Sprintf("  Type: %s", currentReq.Auth.Type))
-	
-	if len(currentReq.Auth.Values) > 0 {
-		lines = append(lines, "") // Empty line separator
-		
-		// Find the maximum key length for alignment
-		maxKeyLength := 0
-		var keys []string
-		for key := range currentReq.Auth.Values {
-			keys = append(keys, key)
-			if len(key) > maxKeyLength {
-				maxKeyLength = len(key)
-			}
-		}
-		sort.Strings(keys)
-		
-		for _, key := range keys {
-			// Align the colons by padding the key to the maximum key length
-			paddedKey := fmt.Sprintf("%-*s", maxKeyLength, key)
-			lines = append(lines, fmt.Sprintf("  %s: %s", paddedKey, currentReq.Auth.Values[key]))
-		}
-	}
-	
-	return strings.Join(lines, "\n")
-}
-
-func renderTagsContent(currentReq *BruRequest, activePanel bool, requestCursor RequestSection, currentSection RequestSection, cursorStyle, sectionStyle, textCursorStyle lipgloss.Style) string {
 	// Initialize edit state if needed
-	currentReq.InitializeTagEditState()
-	editState := currentReq.TagEditState
+	currentReq.InitializeAuthEditState()
+	editState := currentReq.AuthEditState
 	
-	if len(editState.Tags) == 0 {
-		helpText := "  No tags"
-		if activePanel && requestCursor == currentSection {
-			helpText += "\n\n  Press 'a' to add a tag"
-		}
-		return helpText
-	}
-
 	var lines []string
 	
-	// Add help text at the top when in tags section
+	// Add help text at the top when in auth section
 	if activePanel && requestCursor == currentSection {
 		switch editState.Mode {
-		case TagViewMode:
-			lines = append(lines, "  ↑↓: Navigate • Enter/i: Edit • a: Add • d: Delete • Esc: Cancel")
-		case TagEditingMode:
-			lines = append(lines, "  Enter: Save • Esc: Cancel")
-		case TagAddMode:
-			lines = append(lines, "  Enter: Save • Esc: Cancel")
+		case AuthViewMode:
+			lines = append(lines, "  ↑↓: Navigate • Enter/i: Edit • Esc: Cancel")
+		case AuthTypeSelectMode:
+			lines = append(lines, "  ↑↓: Select type • Enter: Confirm • Esc: Cancel")
+		case AuthBearerEditMode:
+			lines = append(lines, "  Type token • Enter: Save • Esc: Cancel")
+		case AuthBasicUsernameEditMode, AuthBasicPasswordEditMode:
+			lines = append(lines, "  Type credentials • Tab: Next field • Enter: Save • Esc: Cancel")
 		}
 		lines = append(lines, "")
 	}
 	
-	// Render each tag
-	for i, tag := range editState.Tags {
-		var line string
-		isSelected := activePanel && requestCursor == currentSection && i == editState.SelectedIndex
-		
-		// Handle different editing modes
-		switch {
-		case editState.Mode == TagEditingMode && isSelected:
-			// Editing tag
-			tagWithCursor := renderTextCursor(editState.EditingTag, editState.CursorPos, textCursorStyle)
-			line = fmt.Sprintf("  %s", tagWithCursor)
-			line = cursorStyle.Render(line)
-			
-		case editState.PendingDeletion == i:
-			// Show deletion confirmation
-			line = fmt.Sprintf("  %s [DELETE? y/n]", tag)
-			line = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(line)
-			
-		case isSelected:
-			// Selected but not editing
-			line = fmt.Sprintf("  %s", tag)
-			line = cursorStyle.Render(line)
-			
-		default:
-			// Normal display
-			line = fmt.Sprintf("  %s", tag)
-		}
-		
-		lines = append(lines, line)
+	// Render auth type selector
+	typeText := "None"
+	switch editState.AuthType {
+	case "bearer":
+		typeText = "Bearer Token"
+	case "basic":
+		typeText = "Basic Auth"
 	}
 	
-	// Show add tag input if in add mode
-	if editState.Mode == TagAddMode && activePanel && requestCursor == currentSection {
+	var typeLine string
+	if editState.Mode == AuthTypeSelectMode && activePanel && requestCursor == currentSection {
+		// Show dropdown options
+		options := []string{"None", "Bearer Token", "Basic Auth"}
+		selectedIndex := 0
+		switch editState.AuthType {
+		case "bearer":
+			selectedIndex = 1
+		case "basic":
+			selectedIndex = 2
+		}
+		
+		typeLine = "  Type: " + typeText + " ▼"
+		lines = append(lines, cursorStyle.Render(typeLine))
+		
+		// Show dropdown options
+		for i, option := range options {
+			prefix := "    "
+			if i == selectedIndex {
+				prefix = "  > "
+				lines = append(lines, cursorStyle.Render(prefix + option))
+			} else {
+				lines = append(lines, prefix + option)
+			}
+		}
+	} else {
+		typeLine = "  Type: " + typeText
+		isTypeSelected := activePanel && requestCursor == currentSection && editState.SelectedField == 0 && editState.Mode == AuthViewMode
+		if isTypeSelected {
+			lines = append(lines, cursorStyle.Render(typeLine))
+		} else {
+			lines = append(lines, typeLine)
+		}
+	}
+	
+	// Render fields based on auth type
+	switch editState.AuthType {
+	case "bearer":
 		lines = append(lines, "")
-		tagWithCursor := renderTextCursor(editState.EditingTag, editState.CursorPos, textCursorStyle)
-		line := fmt.Sprintf("  %s", tagWithCursor)
-		lines = append(lines, cursorStyle.Render(line))
+		
+		var tokenLine string
+		if editState.Mode == AuthBearerEditMode && activePanel && requestCursor == currentSection {
+			// Show token with cursor
+			tokenWithCursor := renderTextCursor(editState.BearerToken, editState.CursorPos, lipgloss.NewStyle().Background(lipgloss.Color("240")))
+			tokenLine = "  Token: " + tokenWithCursor
+			lines = append(lines, cursorStyle.Render(tokenLine))
+		} else {
+			tokenLine = "  Token: " + editState.BearerToken
+			isTokenSelected := activePanel && requestCursor == currentSection && editState.SelectedField == 1 && editState.Mode == AuthViewMode
+			if isTokenSelected {
+				lines = append(lines, cursorStyle.Render(tokenLine))
+			} else {
+				lines = append(lines, tokenLine)
+			}
+		}
+		
+	case "basic":
+		lines = append(lines, "")
+		
+		// Username field
+		var userLine string
+		if editState.Mode == AuthBasicUsernameEditMode && activePanel && requestCursor == currentSection {
+			usernameWithCursor := renderTextCursor(editState.BasicUsername, editState.CursorPos, lipgloss.NewStyle().Background(lipgloss.Color("240")))
+			userLine = "  Username: " + usernameWithCursor
+			lines = append(lines, cursorStyle.Render(userLine))
+		} else {
+			userLine = "  Username: " + editState.BasicUsername
+			isUsernameSelected := activePanel && requestCursor == currentSection && editState.SelectedField == 1 && editState.Mode == AuthViewMode
+			if isUsernameSelected {
+				lines = append(lines, cursorStyle.Render(userLine))
+			} else {
+				lines = append(lines, userLine)
+			}
+		}
+		
+		// Password field
+		var passLine string
+		if editState.Mode == AuthBasicPasswordEditMode && activePanel && requestCursor == currentSection {
+			// Show password with cursor (masked)
+			maskedPassword := strings.Repeat("*", len(editState.BasicPassword))
+			passwordWithCursor := renderTextCursor(maskedPassword, editState.CursorPos, lipgloss.NewStyle().Background(lipgloss.Color("240")))
+			passLine = "  Password: " + passwordWithCursor
+			lines = append(lines, cursorStyle.Render(passLine))
+		} else {
+			// Show masked password
+			maskedPassword := strings.Repeat("*", len(editState.BasicPassword))
+			passLine = "  Password: " + maskedPassword
+			isPasswordSelected := activePanel && requestCursor == currentSection && editState.SelectedField == 2 && editState.Mode == AuthViewMode
+			if isPasswordSelected {
+				lines = append(lines, cursorStyle.Render(passLine))
+			} else {
+				lines = append(lines, passLine)
+			}
+		}
 	}
 	
 	return strings.Join(lines, "\n")
 }
+
 
 func GetMaxRequestSection(currentReq *BruRequest) RequestSection {
 	if currentReq == nil {
@@ -819,9 +1174,6 @@ func GetMaxRequestSection(currentReq *BruRequest) RequestSection {
 	}
 	if currentReq.Body.Type != "" && currentReq.Body.Data != "" {
 		maxSection = BodySection
-	}
-	if len(currentReq.Tags) > 0 {
-		maxSection = TagsSection
 	}
 
 	return maxSection

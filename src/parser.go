@@ -10,7 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"kalo/src/panels"
+	collections "kalo/src/panels/collections"
+	request "kalo/src/panels/request"
 )
 
 
@@ -27,12 +28,12 @@ func NewBruParser(reader io.Reader) *BruParser {
 	}
 }
 
-func (p *BruParser) Parse() (*panels.BruRequest, error) {
-	request := &panels.BruRequest{
+func (p *BruParser) Parse() (*request.BruRequest, error) {
+	request := &request.BruRequest{
 		Headers: make(map[string]string),
 		Query:   make(map[string]string),
 		Vars:    make(map[string]string),
-		Auth:    panels.BruAuth{Values: make(map[string]string)},
+		Auth:    request.BruAuth{Values: make(map[string]string)},
 		Tags:    make([]string, 0),
 	}
 
@@ -100,7 +101,7 @@ func (p *BruParser) nextLine() bool {
 	return false
 }
 
-func (p *BruParser) parseMeta(request *panels.BruRequest) error {
+func (p *BruParser) parseMeta(request *request.BruRequest) error {
 	for p.nextLine() {
 		line := strings.TrimSpace(p.line)
 		if line == "}" {
@@ -133,7 +134,7 @@ func (p *BruParser) parseMeta(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseHTTP(request *panels.BruRequest) error {
+func (p *BruParser) parseHTTP(request *request.BruRequest) error {
 	for p.nextLine() {
 		line := strings.TrimSpace(p.line)
 		if line == "}" {
@@ -160,7 +161,7 @@ func (p *BruParser) parseHTTP(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseHeaders(request *panels.BruRequest) error {
+func (p *BruParser) parseHeaders(request *request.BruRequest) error {
 	for p.nextLine() {
 		line := strings.TrimSpace(p.line)
 		if line == "}" {
@@ -184,7 +185,7 @@ func (p *BruParser) parseHeaders(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseQuery(request *panels.BruRequest) error {
+func (p *BruParser) parseQuery(request *request.BruRequest) error {
 	for p.nextLine() {
 		line := strings.TrimSpace(p.line)
 		if line == "}" {
@@ -208,7 +209,7 @@ func (p *BruParser) parseQuery(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseBody(request *panels.BruRequest, headerLine string) error {
+func (p *BruParser) parseBody(request *request.BruRequest, headerLine string) error {
 	bodyTypeRegex := regexp.MustCompile(`body:(\w+)`)
 	matches := bodyTypeRegex.FindStringSubmatch(headerLine)
 	if len(matches) > 1 {
@@ -249,7 +250,7 @@ func (p *BruParser) parseBody(request *panels.BruRequest, headerLine string) err
 	return nil
 }
 
-func (p *BruParser) parseAuth(request *panels.BruRequest, headerLine string) error {
+func (p *BruParser) parseAuth(request *request.BruRequest, headerLine string) error {
 	authTypeRegex := regexp.MustCompile(`auth:(\w+)`)
 	matches := authTypeRegex.FindStringSubmatch(headerLine)
 	if len(matches) > 1 {
@@ -288,7 +289,7 @@ func (p *BruParser) parseAuth(request *panels.BruRequest, headerLine string) err
 	return nil
 }
 
-func (p *BruParser) parseVars(request *panels.BruRequest) error {
+func (p *BruParser) parseVars(request *request.BruRequest) error {
 	for p.nextLine() {
 		line := strings.TrimSpace(p.line)
 		if line == "}" {
@@ -312,7 +313,7 @@ func (p *BruParser) parseVars(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseTests(request *panels.BruRequest) error {
+func (p *BruParser) parseTests(request *request.BruRequest) error {
 	var content strings.Builder
 	braceCount := 1
 
@@ -337,7 +338,7 @@ func (p *BruParser) parseTests(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseDocs(request *panels.BruRequest) error {
+func (p *BruParser) parseDocs(request *request.BruRequest) error {
 	var content strings.Builder
 	braceCount := 1
 
@@ -362,7 +363,7 @@ func (p *BruParser) parseDocs(request *panels.BruRequest) error {
 	return nil
 }
 
-func (p *BruParser) parseTags(request *panels.BruRequest) error {
+func (p *BruParser) parseTags(request *request.BruRequest) error {
 	for p.nextLine() {
 		line := strings.TrimSpace(p.line)
 		if line == "}" {
@@ -446,18 +447,18 @@ func formatRequestDisplayName(indentLevel, methodEmoji, requestName, method stri
 }
 
 type CollectionsData struct {
-	Collections []panels.CollectionItem
-	BruRequests []*panels.BruRequest
+	Collections []collections.CollectionItem
+	BruRequests []*request.BruRequest
 }
 
 func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
-	collections := []panels.CollectionItem{}
-	bruRequests := []*panels.BruRequest{}
+	collectionItems := []collections.CollectionItem{}
+	bruRequests := []*request.BruRequest{}
 
 	// Check if collections directory exists and has content
 	if _, err := os.Stat(collectionsDir); os.IsNotExist(err) {
 		return &CollectionsData{
-			Collections: collections,
+			Collections: collectionItems,
 			BruRequests: bruRequests,
 		}
 	}
@@ -466,14 +467,14 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 	dirEntries, err := os.ReadDir(collectionsDir)
 	if err != nil {
 		return &CollectionsData{
-			Collections: collections,
+			Collections: collectionItems,
 			BruRequests: bruRequests,
 		}
 	}
 
 	// Group requests by collection and then by tag
-	collectionsMap := make(map[string]map[string][]*panels.BruRequest)
-	requestPaths := make(map[*panels.BruRequest]string)
+	collectionsMap := make(map[string]map[string][]*request.BruRequest)
+	requestPaths := make(map[*request.BruRequest]string)
 
 	// Add collection folders first and load their requests
 	for _, entry := range dirEntries {
@@ -481,7 +482,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 			collectionName := entry.Name()
 			collectionPath := filepath.Join(collectionsDir, collectionName)
 			
-			collectionsMap[collectionName] = make(map[string][]*panels.BruRequest)
+			collectionsMap[collectionName] = make(map[string][]*request.BruRequest)
 
 			// Load .bru files from this collection
 			collectionFiles, err := os.ReadDir(collectionPath)
@@ -522,7 +523,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 	}
 
 	// Add any standalone .bru files in the root collections directory
-	rootRequests := make(map[string][]*panels.BruRequest)
+	rootRequests := make(map[string][]*request.BruRequest)
 	for _, entry := range dirEntries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".bru") {
 			bruPath := filepath.Join(collectionsDir, entry.Name())
@@ -554,7 +555,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 	}
 
 	// Build the display list with tag grouping
-	requestIndexMap := make(map[*panels.BruRequest]int)
+	requestIndexMap := make(map[*request.BruRequest]int)
 	for i, req := range bruRequests {
 		requestIndexMap[req] = i
 	}
@@ -583,7 +584,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 		}
 
 		// Add collection folder header
-		collections = append(collections, panels.CollectionItem{
+		collectionItems = append(collectionItems, collections.CollectionItem{
 			Name:         "📁 " + collectionName,
 			Type:         "folder",
 			FilePath:     filepath.Join(collectionsDir, collectionName),
@@ -613,7 +614,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 				if tagName == "untagged" {
 					tagDisplayName = "📄 untagged"
 				}
-				collections = append(collections, panels.CollectionItem{
+				collectionItems = append(collectionItems, collections.CollectionItem{
 					Name:         "    " + tagDisplayName,
 					Type:         "tag",
 					FilePath:     "",
@@ -647,7 +648,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 				availableWidth := width/3 - 4
 				displayName := formatRequestDisplayName(indentLevel, methodColor, request.Meta.Name, request.HTTP.Method, availableWidth)
 
-				collections = append(collections, panels.CollectionItem{
+				collectionItems = append(collectionItems, collections.CollectionItem{
 					Name:         displayName,
 					Type:         "request",
 					FilePath:     requestPaths[request],
@@ -683,7 +684,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 				if tagName == "untagged" {
 					tagDisplayName = "📄 untagged"
 				}
-				collections = append(collections, panels.CollectionItem{
+				collectionItems = append(collectionItems, collections.CollectionItem{
 					Name:         tagDisplayName,
 					Type:         "tag",
 					FilePath:     "",
@@ -717,7 +718,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 				availableWidth := width/3 - 4
 				displayName := formatRequestDisplayName(indentLevel, methodColor, request.Meta.Name, request.HTTP.Method, availableWidth)
 
-				collections = append(collections, panels.CollectionItem{
+				collectionItems = append(collectionItems, collections.CollectionItem{
 					Name:         displayName,
 					Type:         "request",
 					FilePath:     requestPaths[request],
@@ -732,7 +733,7 @@ func LoadBruFiles(collectionsDir string, width int) *CollectionsData {
 	}
 
 	return &CollectionsData{
-		Collections: collections,
+		Collections: collectionItems,
 		BruRequests: bruRequests,
 	}
 }

@@ -2,7 +2,6 @@ package panels
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -93,63 +92,6 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 	responseViewport.Width = contentWidth
 	responseViewport.Height = availableHeight
 
-	// Create title with status, timing, and MIME type
-	var titleContent string
-	if isLoading {
-		titleContent = " Response │ ⏳ Loading..."
-	} else if lastResponse != nil {
-		// Extract MIME type from Content-Type header
-		contentType := ""
-		if ct, exists := lastResponse.Headers["Content-Type"]; exists {
-			// Extract just the MIME type part (before semicolon if present)
-			if idx := strings.Index(ct, ";"); idx != -1 {
-				contentType = strings.TrimSpace(ct[:idx])
-			} else {
-				contentType = strings.TrimSpace(ct)
-			}
-		}
-		
-		var statusStyle lipgloss.Style
-		if statusCode >= 200 && statusCode < 300 {
-			statusStyle = statusOkStyle
-		} else if statusCode >= 400 {
-			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("196")).Foreground(lipgloss.Color("0")).Padding(0, 1)
-		} else {
-			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("214")).Foreground(lipgloss.Color("0")).Padding(0, 1)
-		}
-		
-		statusText := lastResponse.Status
-		if statusText == "" {
-			statusText = fmt.Sprintf("%d", statusCode)
-		}
-		
-		timing := ""
-		if lastResponse.ResponseTime > 0 {
-			timing = fmt.Sprintf(" • %v", lastResponse.ResponseTime)
-		}
-		
-		mimeInfo := ""
-		if contentType != "" {
-			mimeInfo = fmt.Sprintf(" • %s", contentType)
-		}
-		
-		titleContent = lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			" Response │ ",
-			statusStyle.Render(statusText),
-			timing,
-			mimeInfo,
-			" ",
-		)
-	} else {
-		titleContent = " Response │ " + statusOkStyle.Render("200 OK") + " • Mock Response"
-	}
-	
-	title := titleStyle.Render(titleContent)
-	titleBar := lipgloss.NewStyle().
-		Width(width-2).
-		Align(lipgloss.Left).
-		Render(title)
 
 	// Render tabs (account for panel padding and border)
 	tabs := GetResponseTabNames()
@@ -165,7 +107,7 @@ func RenderResponse(width, height int, activePanel bool, isLoading bool, lastRes
 		tabContent = renderResponseHeadersContent(headersViewport, activePanel, responseCursor, currentSection, cursorStyle, sectionStyle)
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, titleBar, tabsRender, tabContent)
+	content := lipgloss.JoinVertical(lipgloss.Left, tabsRender, tabContent)
 
 	return style.
 		Width(width).

@@ -1,4 +1,4 @@
-package main
+package panels
 
 import (
 	"encoding/json"
@@ -7,21 +7,33 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itchyny/gojq"
-	"kalo/src/panels"
 )
 
+type FilterType string
+
+const (
+	JQFilter          FilterType = "jq"
+	CollectionsFilter FilterType = "collections"
+)
+
+type filterMsg struct {
+	filterType FilterType
+	result     string
+	err        error
+}
+
 type FilterManager struct {
-	mode                  bool
-	filterType            FilterType
-	input                 string
-	cursorPos             int
-	showSuggestions       bool
-	selectedSuggestion    int
-	jqSuggestions         []string
-	lastJQFilter          string
-	lastCollectionsFilter string
-	appliedJQFilter       string
-	originalCollections   []panels.CollectionItem
+	Mode                  bool
+	FilterType            FilterType
+	Input                 string
+	CursorPos             int
+	ShowSuggestions       bool
+	SelectedSuggestion    int
+	JqSuggestions         []string
+	LastJQFilter          string
+	LastCollectionsFilter string
+	AppliedJQFilter       string
+	OriginalCollections   []CollectionItem
 }
 
 func NewFilterManager() *FilterManager {
@@ -29,57 +41,57 @@ func NewFilterManager() *FilterManager {
 }
 
 func (f *FilterManager) StartFilter(filterType FilterType) {
-	f.mode = true
-	f.filterType = filterType
+	f.Mode = true
+	f.FilterType = filterType
 	
 	// Restore previous filter input
 	switch filterType {
 	case JQFilter:
-		f.input = f.lastJQFilter
-		f.showSuggestions = true
-		f.selectedSuggestion = 0
+		f.Input = f.LastJQFilter
+		f.ShowSuggestions = true
+		f.SelectedSuggestion = 0
 	case CollectionsFilter:
-		f.input = f.lastCollectionsFilter
+		f.Input = f.LastCollectionsFilter
 	default:
-		f.input = ""
+		f.Input = ""
 	}
 	
 	// Set cursor to end of input
-	f.cursorPos = len(f.input)
+	f.CursorPos = len(f.Input)
 }
 
-func (f *FilterManager) ExitFilter() []panels.CollectionItem {
+func (f *FilterManager) ExitFilter() []CollectionItem {
 	// Save the current filter input before exiting
-	switch f.filterType {
+	switch f.FilterType {
 	case JQFilter:
-		f.lastJQFilter = f.input
+		f.LastJQFilter = f.Input
 	case CollectionsFilter:
-		f.lastCollectionsFilter = f.input
+		f.LastCollectionsFilter = f.Input
 	}
 	
-	f.mode = false
-	f.input = ""
-	f.showSuggestions = false
-	f.selectedSuggestion = 0
-	f.cursorPos = 0
+	f.Mode = false
+	f.Input = ""
+	f.ShowSuggestions = false
+	f.SelectedSuggestion = 0
+	f.CursorPos = 0
 	
 	// Return original collections if needed for restoration
-	var restore []panels.CollectionItem
-	if f.filterType == CollectionsFilter && len(f.originalCollections) > 0 {
-		restore = make([]panels.CollectionItem, len(f.originalCollections))
-		copy(restore, f.originalCollections)
-		f.originalCollections = nil
+	var restore []CollectionItem
+	if f.FilterType == CollectionsFilter && len(f.OriginalCollections) > 0 {
+		restore = make([]CollectionItem, len(f.OriginalCollections))
+		copy(restore, f.OriginalCollections)
+		f.OriginalCollections = nil
 	}
 	
 	return restore
 }
 
 func (f *FilterManager) ApplyJQFilter(originalResponse string) tea.Cmd {
-	if originalResponse == "" || f.input == "" {
+	if originalResponse == "" || f.Input == "" {
 		return nil
 	}
 
-	filter := f.input
+	filter := f.Input
 	originalData := originalResponse
 
 	return func() tea.Msg {
@@ -129,17 +141,17 @@ func (f *FilterManager) ApplyJQFilter(originalResponse string) tea.Cmd {
 	}
 }
 
-func (f *FilterManager) ApplyCollectionsFilter(originalCollections []panels.CollectionItem) []panels.CollectionItem {
+func (f *FilterManager) ApplyCollectionsFilter(originalCollections []CollectionItem) []CollectionItem {
 	// Store original if not already stored
-	if len(f.originalCollections) == 0 {
-		f.originalCollections = make([]panels.CollectionItem, len(originalCollections))
-		copy(f.originalCollections, originalCollections)
+	if len(f.OriginalCollections) == 0 {
+		f.OriginalCollections = make([]CollectionItem, len(originalCollections))
+		copy(f.OriginalCollections, originalCollections)
 	}
 
 	// If filter is empty, restore all collections and collapse them
-	if f.input == "" {
-		collections := make([]panels.CollectionItem, len(f.originalCollections))
-		copy(collections, f.originalCollections)
+	if f.Input == "" {
+		collections := make([]CollectionItem, len(f.OriginalCollections))
+		copy(collections, f.OriginalCollections)
 		
 		// Reset expansion state to collapsed
 		for i := range collections {
@@ -151,13 +163,13 @@ func (f *FilterManager) ApplyCollectionsFilter(originalCollections []panels.Coll
 		return collections
 	}
 
-	filter := strings.ToLower(f.input)
-	var filteredCollections []panels.CollectionItem
-	var currentFolder *panels.CollectionItem
-	var currentTagGroup *panels.CollectionItem
+	filter := strings.ToLower(f.Input)
+	var filteredCollections []CollectionItem
+	var currentFolder *CollectionItem
+	var currentTagGroup *CollectionItem
 	var hasMatchingRequests bool
 	
-	for _, item := range f.originalCollections {
+	for _, item := range f.OriginalCollections {
 		if item.IsFolder {
 			// Store current folder, add it later if it has matching requests
 			currentFolder = &item
@@ -193,7 +205,7 @@ func (f *FilterManager) ApplyCollectionsFilter(originalCollections []panels.Coll
 }
 
 func (f *FilterManager) GenerateJQSuggestions(originalResponse string) {
-	f.jqSuggestions = []string{}
+	f.JqSuggestions = []string{}
 	
 	// Basic jq operations
 	basicSuggestions := []string{
@@ -216,12 +228,12 @@ func (f *FilterManager) GenerateJQSuggestions(originalResponse string) {
 		"add",
 	}
 	
-	f.jqSuggestions = append(f.jqSuggestions, basicSuggestions...)
+	f.JqSuggestions = append(f.JqSuggestions, basicSuggestions...)
 	
 	// Extract field suggestions from current JSON
 	if originalResponse != "" {
 		fieldSuggestions := f.extractJSONFields(originalResponse, "")
-		f.jqSuggestions = append(f.jqSuggestions, fieldSuggestions...)
+		f.JqSuggestions = append(f.JqSuggestions, fieldSuggestions...)
 	}
 }
 
@@ -283,14 +295,14 @@ func (f *FilterManager) GetFilteredSuggestions(originalResponse string) []string
 	// Regenerate suggestions based on current input context
 	f.generateContextualSuggestions(originalResponse)
 	
-	if f.input == "" {
-		return f.jqSuggestions
+	if f.Input == "" {
+		return f.JqSuggestions
 	}
 	
 	var filtered []string
-	input := strings.ToLower(f.input)
+	input := strings.ToLower(f.Input)
 	
-	for _, suggestion := range f.jqSuggestions {
+	for _, suggestion := range f.JqSuggestions {
 		if strings.Contains(strings.ToLower(suggestion), input) ||
 		   strings.HasPrefix(strings.ToLower(suggestion), input) {
 			filtered = append(filtered, suggestion)
@@ -305,9 +317,9 @@ func (f *FilterManager) generateContextualSuggestions(originalResponse string) {
 	f.GenerateJQSuggestions(originalResponse)
 	
 	// Add contextual suggestions based on current input
-	if originalResponse != "" && f.input != "" {
-		contextSuggestions := f.getContextualCompletions(f.input, originalResponse)
-		f.jqSuggestions = append(f.jqSuggestions, contextSuggestions...)
+	if originalResponse != "" && f.Input != "" {
+		contextSuggestions := f.getContextualCompletions(f.Input, originalResponse)
+		f.JqSuggestions = append(f.JqSuggestions, contextSuggestions...)
 	}
 }
 
@@ -449,7 +461,7 @@ func (f *FilterManager) FindNextWordBoundary(input string, pos int) int {
 	return len(input)
 }
 
-func (f *FilterManager) UpdateVisibility(collections []panels.CollectionItem) []panels.CollectionItem {
+func (f *FilterManager) UpdateVisibility(collections []CollectionItem) []CollectionItem {
 	for i := range collections {
 		item := &collections[i]
 		
@@ -493,10 +505,10 @@ func (f *FilterManager) UpdateVisibility(collections []panels.CollectionItem) []
 func (f *FilterManager) Reset(filterType FilterType) {
 	switch filterType {
 	case JQFilter:
-		f.lastJQFilter = ""
-		f.appliedJQFilter = ""
+		f.LastJQFilter = ""
+		f.AppliedJQFilter = ""
 	case CollectionsFilter:
-		f.lastCollectionsFilter = ""
-		f.originalCollections = nil
+		f.LastCollectionsFilter = ""
+		f.OriginalCollections = nil
 	}
 }

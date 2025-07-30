@@ -2,17 +2,21 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"kalo/src/panels"
+	collections "kalo/src/panels/collections"
+	request "kalo/src/panels/request"
+	response "kalo/src/panels/response"
 )
 
 type panel int
@@ -24,7 +28,7 @@ const (
 )
 
 type httpResponseMsg struct {
-	response *panels.HTTPResponse
+	response *response.HTTPResponse
 	err      error
 }
 
@@ -38,11 +42,11 @@ type jqFilterMsg struct {
 	err    error
 }
 
-type FilterType string
+type FilterType = collections.FilterType
 
 const (
-	JQFilter          FilterType = "jq"
-	CollectionsFilter FilterType = "collections"
+	JQFilter          = collections.JQFilter
+	CollectionsFilter = collections.CollectionsFilter
 )
 
 type filterMsg struct {
@@ -55,26 +59,26 @@ type model struct {
 	width            int
 	height           int
 	activePanel      panel
-	collections      []panels.CollectionItem
+	collections      []collections.CollectionItem
 	selectedReq      int
-	bruRequests      []*panels.BruRequest
-	currentReq       *panels.BruRequest
-	requestCursor    panels.RequestSection
+	bruRequests      []*request.BruRequest
+	currentReq       *request.BruRequest
+	requestCursor    request.RequestSection
 	requestActiveTab int
 	response         string
 	statusCode       int
 	httpClient       *HTTPClient
-	lastResponse     *panels.HTTPResponse
+	lastResponse     *response.HTTPResponse
 	isLoading        bool
 	collectionsViewport viewport.Model
 	responseViewport viewport.Model
 	headersViewport  viewport.Model
-	responseCursor   panels.ResponseSection
+	responseCursor   response.ResponseSection
 	responseActiveTab int
 	originalResponse string // Store original response for jq filtering
 	commandPalette   *CommandPalette
 	inputDialog      *InputDialog
-	filterManager    *FilterManager
+	filterManager    *collections.FilterManager
 	inputHandler     *InputHandler
 }
 
@@ -121,7 +125,7 @@ func getCollectionsDir() (string, error) {
 	return collectionsDir, nil
 }
 
-func initialModel() model {
+func initialModel() *model {
 	collectionsVP := viewport.New(30, 20)
 	collectionsVP.SetContent("Loading collections...")
 
@@ -136,8 +140,8 @@ func initialModel() model {
 	m := model{
 		activePanel:         collectionsPanel,
 		selectedReq:         0,
-		requestCursor:       panels.QuerySection,
-		responseCursor:      panels.ResponseBodySection,
+		requestCursor:       request.QuerySection,
+		responseCursor:      response.ResponseBodySection,
 		statusCode:          200,
 		httpClient:          NewHTTPClient(),
 		collectionsViewport: collectionsVP,
@@ -145,21 +149,21 @@ func initialModel() model {
 		headersViewport:     headersVP,
 		commandPalette:      NewCommandPalette(),
 		inputDialog:         NewInputDialog(),
-		filterManager:       NewFilterManager(),
+		filterManager:       collections.NewFilterManager(),
 		inputHandler:        NewInputHandler(),
 		response: `{
   "message": "Select a request to see response"
 }`,
 	}
 	m.loadBruFiles()
-	return m
+	return &m
 }
 
 func (m *model) loadBruFiles() {
 	collectionsDir, err := getCollectionsDir()
 	if err != nil {
-		m.collections = []panels.CollectionItem{}
-		m.bruRequests = []*panels.BruRequest{}
+		m.collections = []collections.CollectionItem{}
+		m.bruRequests = []*request.BruRequest{}
 		return
 	}
 
@@ -190,17 +194,7 @@ func (m *model) loadBruFiles() {
 }
 
 func (m *model) toggleExpansion(index int) {
-	if index < 0 || index >= len(m.collections) {
-		return
-	}
-	
-	item := &m.collections[index]
-	if !item.IsFolder && !item.IsTagGroup {
-		return
-	}
-	
-	// Toggle expansion state
-	item.IsExpanded = !item.IsExpanded
+	collections.ToggleExpansion(m.collections, index)
 	
 	// Update visibility of child items
 	m.updateVisibility()
@@ -208,69 +202,7 @@ func (m *model) toggleExpansion(index int) {
 
 
 func (m *model) updateCollectionsViewport() {
-	var items []string
-	visibleIndex := 0
-	selectedVisibleIndex := -1
-	
-	for i, item := range m.collections {
-		if !item.IsVisible {
-			continue
-		}
-		
-		// Track which visible item corresponds to the selected index
-		if i == m.selectedReq {
-			selectedVisibleIndex = visibleIndex
-		}
-		
-		// Add expand/collapse indicator for folders and tag groups
-		displayName := item.Name
-		if item.IsFolder || item.IsTagGroup {
-			// Extract existing indentation and content
-			indentLevel := ""
-			content := displayName
-			
-			// Find where the actual content starts (after spaces)
-			for i, char := range displayName {
-				if char != ' ' {
-					indentLevel = displayName[:i]
-					content = displayName[i:]
-					break
-				}
-			}
-			
-			// Add +/- at the same indentation level
-			if item.IsExpanded {
-				displayName = indentLevel + "- " + content
-			} else {
-				displayName = indentLevel + "+ " + content
-			}
-		}
-		
-		if i == m.selectedReq {
-			// Use solid colored bar spanning the whole row for selected item
-			items = append(items, currentTheme.TextCursorStyle.Render("  "+displayName))
-		} else {
-			items = append(items, "  "+displayName)
-		}
-		visibleIndex++
-	}
-	
-	content := strings.Join(items, "\n")
-	m.collectionsViewport.SetContent(content)
-	
-	// Ensure the selected item is visible (use visible index for scrolling)
-	if selectedVisibleIndex >= 0 {
-		viewportHeight := m.collectionsViewport.Height
-		
-		// If selected item is below the visible area, scroll down
-		if selectedVisibleIndex >= m.collectionsViewport.YOffset+viewportHeight {
-			m.collectionsViewport.SetYOffset(selectedVisibleIndex - viewportHeight + 1)
-		}
-		// If selected item is above the visible area, scroll up
-		if selectedVisibleIndex < m.collectionsViewport.YOffset {
-			m.collectionsViewport.SetYOffset(selectedVisibleIndex)
-		}
-	}
+	collections.UpdateCollectionsViewport(m.collections, m.selectedReq, &m.collectionsViewport, currentTheme.TextCursorStyle)
 }
 
 // Wrapper methods for filter operations
@@ -310,7 +242,7 @@ func (m *model) applyFilter() tea.Cmd {
 func (m *model) applyCollectionsFilterResult() {
 	filtered := m.filterManager.ApplyCollectionsFilter(m.collections)
 	m.collections = filtered
-	m.collections = m.filterManager.UpdateVisibility(m.collections)
+	m.collections = collections.UpdateVisibility(m.collections)
 	
 	// Reset selection to first visible item if current selection is out of bounds
 	if m.selectedReq >= len(m.collections) {
@@ -339,83 +271,83 @@ func (m *model) findNextWordBoundary(input string, pos int) int {
 
 // Properties for accessing filter state
 func (m *model) filterMode() bool {
-	return m.filterManager.mode
+	return m.filterManager.Mode
 }
 
 func (m *model) filterType() FilterType {
-	return m.filterManager.filterType
+	return m.filterManager.FilterType
 }
 
 func (m *model) filterInput() string {
-	return m.filterManager.input
+	return m.filterManager.Input
 }
 
 func (m *model) filterCursorPos() int {
-	return m.filterManager.cursorPos
+	return m.filterManager.CursorPos
 }
 
 func (m *model) showSuggestions() bool {
-	return m.filterManager.showSuggestions
+	return m.filterManager.ShowSuggestions
 }
 
 func (m *model) selectedSuggestion() int {
-	return m.filterManager.selectedSuggestion
+	return m.filterManager.SelectedSuggestion
 }
 
 func (m *model) appliedJQFilter() string {
-	return m.filterManager.appliedJQFilter
+	return m.filterManager.AppliedJQFilter
 }
 
-func (m *model) originalCollections() []panels.CollectionItem {
-	return m.filterManager.originalCollections
+func (m *model) originalCollections() []collections.CollectionItem {
+	return m.filterManager.OriginalCollections
 }
 
 // Property setters for input handler
 func (m *model) setFilterInput(input string) {
-	m.filterManager.input = input
+	m.filterManager.Input = input
 }
 
 func (m *model) setFilterCursorPos(pos int) {
-	m.filterManager.cursorPos = pos
+	m.filterManager.CursorPos = pos
 }
 
 func (m *model) setSelectedSuggestion(index int) {
-	m.filterManager.selectedSuggestion = index
+	m.filterManager.SelectedSuggestion = index
 }
 
 func (m *model) setAppliedJQFilter(filter string) {
-	m.filterManager.appliedJQFilter = filter
+	m.filterManager.AppliedJQFilter = filter
 }
 
 func (m *model) setFilterMode(mode bool) {
-	m.filterManager.mode = mode
+	m.filterManager.Mode = mode
 }
 
 func (m *model) setLastCollectionsFilter(filter string) {
-	m.filterManager.lastCollectionsFilter = filter
+	m.filterManager.LastCollectionsFilter = filter
 }
 
-func (m *model) setOriginalCollections(collections []panels.CollectionItem) {
-	m.filterManager.originalCollections = collections
+func (m *model) setOriginalCollections(collections []collections.CollectionItem) {
+	m.filterManager.OriginalCollections = collections
 }
 
 func (m *model) updateVisibility() {
-	m.collections = m.filterManager.UpdateVisibility(m.collections)
+	m.collections = collections.UpdateVisibility(m.collections)
 }
 
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return tea.EnterAltScreen
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
-		return m.inputHandler.HandleKeyboardInput(&m, msg)
+		return m.inputHandler.HandleKeyboardInput(m, msg)
 		
 	case httpResponseMsg:
 		m.isLoading = false
@@ -483,7 +415,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.response = msg.result
 				m.responseViewport.SetContent(m.response)
 				m.responseViewport.GotoTop()
-				m.setAppliedJQFilter(m.filterManager.lastJQFilter) // Use the saved filter from exitFilter
+				m.setAppliedJQFilter(m.filterManager.LastJQFilter) // Use the saved filter from exitFilter
 			} else if msg.filterType == CollectionsFilter {
 				// Apply filtered collections
 				m.applyCollectionsFilterResult()
@@ -508,7 +440,7 @@ func (m *model) updateCurrentRequest() {
 	// Use the stored RequestIndex instead of calculating it
 	if item.RequestIndex >= 0 && item.RequestIndex < len(m.bruRequests) {
 		m.currentReq = m.bruRequests[item.RequestIndex]
-		m.requestCursor = panels.QuerySection
+		m.requestCursor = request.QuerySection
 	}
 }
 
@@ -700,13 +632,13 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 					filePath := filepath.Join(targetDir, filename)
 					
 					// Create a new BruRequest object
-					newReq := &panels.BruRequest{
-						Meta: panels.BruMeta{
+					newReq := &request.BruRequest{
+						Meta: request.BruMeta{
 							Name: displayName,
 							Type: "http",
 							Seq:  1,
 						},
-						HTTP: panels.BruHTTP{
+						HTTP: request.BruHTTP{
 							Method: method,
 							URL:    urlStr,
 						},
@@ -796,7 +728,7 @@ func (m *model) executeInputCommand(action string, input string, actionData map[
 	}
 }
 
-func (m model) View() string {
+func (m *model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
@@ -804,86 +736,28 @@ func (m model) View() string {
 	sidebarWidth := m.width / 3
 	mainWidth := m.width - sidebarWidth - 2
 
-	// Account for header (1 line) + footer (1 line) + some padding
-	availableHeight := m.height - 4
+	// Account for header (1 line) + footer (1 line) + titles + some padding
+	availableHeight := m.height - 5
 
-	sidebar := panels.RenderCollections(sidebarWidth, availableHeight, m.activePanel == collectionsPanel, &m.collectionsViewport, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle)
+	// Render collections title separately above the sidebar
+	collectionsTitle := m.renderCollectionsTitle(sidebarWidth)
+	sidebar := collections.RenderCollections(sidebarWidth, availableHeight, m.activePanel == collectionsPanel, &m.collectionsViewport, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle)
+	
+	// Combine collections title with sidebar
+	sidebarWithTitle := lipgloss.JoinVertical(lipgloss.Left, collectionsTitle, sidebar)
+	
 	main := m.renderMainArea(mainWidth, availableHeight)
 
 	content := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		sidebar,
+		sidebarWithTitle,
 		main,
 	)
 
 	header := currentTheme.TitleStyle.Width(m.width - 2).Render("Kalo - Bruno API Client")
 
-	var footerText string
-	if m.filterMode() {
-		filterName := ""
-		switch m.filterType() {
-		case JQFilter:
-			filterName = "jq"
-		case CollectionsFilter:
-			filterName = "search"
-		}
-		
-		// Show suggestions for jq filter
-		if m.filterType() == JQFilter && m.showSuggestions() {
-			filteredSuggestions := m.getFilteredSuggestions()
-			if len(filteredSuggestions) > 0 {
-				suggestionText := ""
-				// Show up to 3 suggestions in footer
-				maxShow := 3
-				if len(filteredSuggestions) < maxShow {
-					maxShow = len(filteredSuggestions)
-				}
-				
-				for i := 0; i < maxShow; i++ {
-					if i == m.selectedSuggestion() {
-						suggestionText += "[" + filteredSuggestions[i] + "]"
-					} else {
-						suggestionText += filteredSuggestions[i]
-					}
-					if i < maxShow-1 {
-						suggestionText += " "
-					}
-				}
-				
-				if len(filteredSuggestions) > maxShow {
-					suggestionText += fmt.Sprintf(" (+%d more)", len(filteredSuggestions)-maxShow)
-				}
-				
-				// Show input with cursor
-				inputWithCursor := renderFilterCursor(m.filterInput(), m.filterCursorPos())
-				footerText = fmt.Sprintf("%s filter: %s • ↑↓: Navigate • Tab: Complete • Enter: Apply • Esc: Cancel | %s", filterName, inputWithCursor, suggestionText)
-			} else {
-				// Show input with cursor
-				inputWithCursor := renderFilterCursor(m.filterInput(), m.filterCursorPos())
-				footerText = fmt.Sprintf("%s filter: %s • Enter: Apply • Esc: Cancel", filterName, inputWithCursor)
-			}
-		} else {
-			// Show input with cursor
-			inputWithCursor := renderFilterCursor(m.filterInput(), m.filterCursorPos())
-			footerText = fmt.Sprintf("%s filter: %s • Enter: Apply • Esc: Cancel", filterName, inputWithCursor)
-		}
-	} else if m.isLoading {
-		footerText = "Loading... • Tab: Switch panels • p: Command Palette • q: Quit"
-	} else if m.activePanel == responsePanel {
-		if m.appliedJQFilter() != "" {
-			footerText = "Tab: Switch panels • ←→: Switch Headers/Body • ↑↓: Scroll • Space/PgDn/PgUp/Home/End • s: Send • Ctrl+j: jq filter • Ctrl+r: Reset filter • p: Command Palette • q: Quit"
-		} else {
-			footerText = "Tab: Switch panels • ←→: Switch Headers/Body • ↑↓: Scroll • Space/PgDn/PgUp/Home/End • s: Send • Ctrl+j: jq filter • p: Command Palette • q: Quit"
-		}
-	} else if m.activePanel == collectionsPanel {
-		if len(m.originalCollections()) > 0 && len(m.collections) != len(m.originalCollections()) {
-			footerText = "Tab: Switch panels • ↑↓: Navigate • PgUp/PgDn/Home/End: Scroll • Enter/Space/s: Execute • Ctrl+f: Search • Ctrl+r: Reset filter • p: Command Palette • q: Quit"
-		} else {
-			footerText = "Tab: Switch panels • ↑↓: Navigate • PgUp/PgDn/Home/End: Scroll • Enter/Space/s: Execute • Ctrl+f: Search • p: Command Palette • q: Quit"
-		}
-	} else {
-		footerText = "Tab: Switch panels • ↑↓: Navigate • Enter/Space/s: Execute • p: Command Palette • q: Quit"
-	}
+	// Get footer text from input handler (which delegates to appropriate panel)
+	footerText := m.inputHandler.GetFooterText(m)
 	footer := currentTheme.HeaderStyle.Width(m.width - 2).Render(footerText)
 
 	baseView := lipgloss.JoinVertical(
@@ -908,10 +782,11 @@ func (m model) View() string {
 	return baseView
 }
 
-func (m model) renderMainArea(width, height int) string {
-	// Account for borders and titles in each panel (roughly 3 lines each)
-	requestHeight := (height / 2) - 2
-	responseHeight := height - requestHeight - 4
+func (m *model) renderMainArea(width, height int) string {
+	// Account for borders and separate titles (roughly 4 lines total)
+	titleHeight := 1
+	requestHeight := (height - 2*titleHeight) / 2 - 2
+	responseHeight := height - requestHeight - 2*titleHeight - 4
 
 	// Ensure minimum heights
 	if requestHeight < 5 {
@@ -921,15 +796,105 @@ func (m model) renderMainArea(width, height int) string {
 		responseHeight = 5
 	}
 
-	request := panels.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, m.requestActiveTab, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle, currentTheme.CursorStyle, currentTheme.MethodStyle, currentTheme.URLStyle, currentTheme.SectionStyle, currentTheme.TextCursorStyle)
-	response := panels.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, m.responseActiveTab, &m.headersViewport, &m.responseViewport, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle, currentTheme.CursorStyle, currentTheme.SectionStyle, currentTheme.StatusOkStyle, m.appliedJQFilter())
+	// Render titles separately above each panel
+	requestTitle := m.renderRequestTitle(width)
+	responseTitle := m.renderResponseTitle(width)
 
-	return lipgloss.JoinVertical(lipgloss.Left, request, response)
+	request := request.RenderRequest(width, requestHeight, m.currentReq, m.activePanel == requestPanel, m.requestCursor, m.requestActiveTab, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle, currentTheme.CursorStyle, currentTheme.MethodStyle, currentTheme.URLStyle, currentTheme.SectionStyle, currentTheme.TextCursorStyle)
+	response := response.RenderResponse(width, responseHeight, m.activePanel == responsePanel, m.isLoading, m.lastResponse, m.statusCode, m.responseCursor, m.responseActiveTab, &m.headersViewport, &m.responseViewport, currentTheme.FocusedStyle, currentTheme.BlurredStyle, currentTheme.TitleStyle, currentTheme.CursorStyle, currentTheme.SectionStyle, currentTheme.StatusOkStyle, m.appliedJQFilter())
+
+	return lipgloss.JoinVertical(lipgloss.Left, requestTitle, request, responseTitle, response)
+}
+
+func (m *model) renderRequestTitle(width int) string {
+	var titleContent string
+	
+	if m.currentReq == nil {
+		titleContent = " Request "
+	} else {
+		// Create title with method and URL
+		titleContent = lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			" Request ",
+			" ",
+			currentTheme.MethodStyle.Render(m.currentReq.HTTP.Method),
+			" ",
+			currentTheme.URLStyle.Render(m.currentReq.HTTP.URL),
+			" ",
+		)
+	}
+	
+	return currentTheme.TitleStyle.Width(width-2).Render(titleContent)
+}
+
+func (m *model) renderResponseTitle(width int) string {
+	var titleContent string
+	
+	if m.isLoading {
+		titleContent = " Response ⏳ Loading..."
+	} else if m.lastResponse != nil {
+		// Extract MIME type from Content-Type header
+		contentType := ""
+		if ct, exists := m.lastResponse.Headers["Content-Type"]; exists {
+			// Extract just the MIME type part (before semicolon if present)
+			if idx := strings.Index(ct, ";"); idx != -1 {
+				contentType = strings.TrimSpace(ct[:idx])
+			} else {
+				contentType = strings.TrimSpace(ct)
+			}
+		}
+		
+		var statusStyle lipgloss.Style
+		if m.statusCode >= 200 && m.statusCode < 300 {
+			statusStyle = currentTheme.StatusOkStyle
+		} else if m.statusCode >= 400 {
+			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("196")).Foreground(lipgloss.Color("0")).Padding(0, 1)
+		} else {
+			statusStyle = lipgloss.NewStyle().Background(lipgloss.Color("214")).Foreground(lipgloss.Color("0")).Padding(0, 1)
+		}
+		
+		statusText := fmt.Sprintf("%d %s", m.statusCode, http.StatusText(m.statusCode))
+		
+		// Add timing information
+		timing := ""
+		if m.lastResponse.ResponseTime > 0 {
+			if m.lastResponse.ResponseTime < time.Millisecond {
+				timing = fmt.Sprintf(" • %.2fμs", float64(m.lastResponse.ResponseTime.Nanoseconds())/1000)
+			} else if m.lastResponse.ResponseTime < time.Second {
+				timing = fmt.Sprintf(" • %.2fms", float64(m.lastResponse.ResponseTime.Nanoseconds())/1000000)
+			} else {
+				timing = fmt.Sprintf(" • %.2fs", m.lastResponse.ResponseTime.Seconds())
+			}
+		}
+		
+		// Add MIME type info
+		mimeInfo := ""
+		if contentType != "" {
+			mimeInfo = fmt.Sprintf(" • %s", contentType)
+		}
+		
+		titleContent = lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			" Response ",
+			statusStyle.Render(statusText),
+			timing,
+			mimeInfo,
+			" ",
+		)
+	} else {
+		titleContent = " Response " + currentTheme.StatusOkStyle.Render("200 OK") + " • Mock Response"
+	}
+	
+	return currentTheme.TitleStyle.Width(width-2).Render(titleContent)
+}
+
+func (m *model) renderCollectionsTitle(width int) string {
+	return currentTheme.TitleStyle.Width(width-2).Render(" Collections ")
 }
 
 // generateBruContent creates a complete .bru file content from a BruRequest,
 // preserving all existing data including tags, headers, query params, body, auth, etc.
-func (m *model) generateBruContent(request *panels.BruRequest) string {
+func (m *model) generateBruContent(request *request.BruRequest) string {
 	var content strings.Builder
 	
 	// Meta block
